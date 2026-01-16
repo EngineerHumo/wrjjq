@@ -62,14 +62,18 @@ class TargetPredictor:
 
         self.ID = ID
         self.priority = priority
-        self.M, self.N = map_size
-        self.N = num_particles
+        self.M, self.map_width = map_size
+        self.num_particles = num_particles
         # 地图处理
-        self.map = np.zeros((self.M, self.N))
+        self.map = np.zeros((self.M, self.map_width))
         if obstacles_map is not None:
             obstaces_xy = np.array(obstacles_map)
+            if obstaces_xy.size == 0:
+                obstaces_xy = obstaces_xy.reshape(0, 2)
+            else:
+                obstaces_xy = obstaces_xy.astype(int, copy=False)
             # 简单的边界检查防止索引报错
-            valid_obs = (obstaces_xy[:, 0] < self.M) & (obstaces_xy[:, 1] < self.N)
+            valid_obs = (obstaces_xy[:, 0] < self.M) & (obstaces_xy[:, 1] < self.map_width)
             obstaces_xy = obstaces_xy[valid_obs]
             if len(obstaces_xy) > 0:
                 self.map[obstaces_xy[:, 0], obstaces_xy[:, 1]] = -1
@@ -80,8 +84,8 @@ class TargetPredictor:
 
         # 状态向量: [x, y, vx, vy, omega (转弯率)]
         # 使用 Nx5 的矩阵进行向量化操作，避免慢速循环
-        self.particles = np.zeros((self.N, 5))
-        self.weights = np.ones(self.N) / self.N
+        self.particles = np.zeros((self.num_particles, 5))
+        self.weights = np.ones(self.num_particles) / self.num_particles
 
         # 过程噪声标准差 (基准值)
         # [x, y, vx, vy, omega] 的扰动
@@ -106,31 +110,31 @@ class TargetPredictor:
         在给定的速度和角度区间内进行均匀采样。
         """
         # 位置初始化
-        self.particles[:, 0] = init_pos[0] + randn(self.N) * 2.0
-        self.particles[:, 1] = init_pos[1] + randn(self.N) * 2.0
+        self.particles[:, 0] = init_pos[0] + randn(self.num_particles) * 2.0
+        self.particles[:, 1] = init_pos[1] + randn(self.num_particles) * 2.0
 
         # 速度模长采样 (校正面密度)
         # u ~ U -> v = sqrt(v_min^2 + u*(v_max^2 - v_min^2))
-        u = random(self.N)
+        u = random(self.num_particles)
         v_sq_samples = self.v_min ** 2 + u * (self.v_max ** 2 - self.v_min ** 2)
         v_samples = np.sqrt(v_sq_samples)
 
         # 航向角采样
-        th_samples = uniform(self.th_min, self.th_max, self.N)
+        th_samples = uniform(self.th_min, self.th_max, self.num_particles)
 
         # 转换回笛卡尔坐标系
         self.particles[:, 2] = v_samples * np.cos(th_samples)
         self.particles[:, 3] = v_samples * np.sin(th_samples)
 
         # 转弯率初始化
-        self.particles[:, 4] = uniform(-np.deg2rad(5), np.deg2rad(5), self.N)
+        self.particles[:, 4] = uniform(-np.deg2rad(5), np.deg2rad(5), self.num_particles)
 
     def predict(self, innovation_norm=0.0):
         """
         状态预测步骤 (向量化实现协同转弯 CT 模型)
         """
         dt = self.dt
-        N = self.N
+        N = self.num_particles
 
         # 自适应噪声调节
         # 新息(误差)越大，说明目标可能在机动，需增大过程噪声Q
@@ -201,7 +205,7 @@ class TargetPredictor:
         量测更新与软约束权重惩罚
         """
         # 计算似然
-        likelihood = np.ones(self.N)
+        likelihood = np.ones(self.num_particles)
         if z is not None:
             # Case 1: 探测到目标
             # z: [x, y]
@@ -216,8 +220,8 @@ class TargetPredictor:
             # 如果粒子在任意无人机的探测范围内，但无人机没看到，那么该粒子的权重应该降低
             sensor_r = 250.0  # 探测半径
             sensor_r_sq = sensor_r ** 2
-            coverage_counts = np.zeros(self.N)  # 计入粒子被几个无人机惩罚过
-            neg_likelihood = np.ones(self.N)
+            coverage_counts = np.zeros(self.num_particles)  # 计入粒子被几个无人机惩罚过
+            neg_likelihood = np.ones(self.num_particles)
             # 对于每一架没看到目标的无人机
             for det in det_res:
                 if not det["detected"]:
@@ -262,7 +266,7 @@ class TargetPredictor:
         # 归一化
         w_sum = np.sum(self.weights)
         if w_sum == 0:
-            self.weights.fill(1.0 / self.N)
+            self.weights.fill(1.0 / self.num_particles)
         else:
             self.weights /= w_sum
 
@@ -276,10 +280,10 @@ class TargetPredictor:
         N_eff = 1.0 / np.sum(self.weights ** 2)
 
         # 如果有效粒子太少，则重采样
-        if N_eff < self.N / 2:
-            indices = np.random.choice(self.N, self.N, p=self.weights)
+        if N_eff < self.num_particles / 2:
+            indices = np.random.choice(self.num_particles, self.num_particles, p=self.weights)
             self.particles = self.particles[indices]
-            self.weights.fill(1.0 / self.N)
+            self.weights.fill(1.0 / self.num_particles)
 
     def step_update(self, z, innovation_norm, det_res):
         self.predict(innovation_norm=innovation_norm)
@@ -329,14 +333,14 @@ class TargetPredictor:
         col = np.floor(px).astype(int)
         row = (self.M - 1) - np.floor(py).astype(int)
 
-        valid = (row >= 0) & (row < self.M) & (col >= 0) & (col < self.N)
+        valid = (row >= 0) & (row < self.M) & (col >= 0) & (col < self.map_width)
 
-        prob_grid = np.zeros((self.M, self.N))
+        prob_grid = np.zeros((self.M, self.map_width))
         if np.any(valid):
             # 使用加权直方图
             H, _, _ = np.histogram2d(
                 row[valid], col[valid],
-                bins=[np.arange(self.M + 1), np.arange(self.N + 1)],
+                bins=[np.arange(self.M + 1), np.arange(self.map_width + 1)],
                 weights=self.weights[valid],  # 关键：使用权重
                 density=False
             )

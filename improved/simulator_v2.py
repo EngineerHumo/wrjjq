@@ -149,8 +149,8 @@ def plot_heatmaps(output_dir, predictors, time_step, eval_tag):
         plt.close()
 
 
-def run_evaluation(eval_dir, episode, uav_list, uav_configs, map_size, obs_map, tarcfgs, max_steps):
-    predictors, real_targets = init_predictors_targets(map_size, obs_map, tarcfgs)
+def run_evaluation(eval_dir, episode, uav_list, uav_configs, map_size, obs_map, obstacles, tarcfgs, max_steps):
+    predictors, real_targets = init_predictors_targets(map_size, obstacles, tarcfgs)
     for i, uav in enumerate(uav_list):
         uav.pos = np.array(uav_configs[i]["pos"], dtype=float)
         uav.v = uav_configs[i]["initial_v"]
@@ -323,7 +323,7 @@ def train_with_improvements():
     # 训练主循环
     print("开始训练 Improved MADDPG")
     for episode in range(MAX_EPISODES):
-        predictors, real_targets = init_predictors_targets(map_size, obs_map, tarcfgs)
+        predictors, real_targets = init_predictors_targets(map_size, obstacles, tarcfgs)
 
         # 重置无人机部分参数
         for i, uav in enumerate(uav_list):
@@ -444,7 +444,7 @@ def train_with_improvements():
 
         if (episode + 1) % eval_interval == 0:
             eval_h_final, eval_delta_h = run_evaluation(
-                eval_dir, episode + 1, uav_list, uav_configs, map_size, obs_map, tarcfgs, MAX_STEPS
+                eval_dir, episode + 1, uav_list, uav_configs, map_size, obs_map, obstacles, tarcfgs, MAX_STEPS
             )
 
             if eval_h_final < best_record["eval_H_final"] or eval_delta_h > best_record["eval_delta_H"]:
