@@ -32,10 +32,15 @@ class RealTarget:
 
         if abs(self.state[5]) > 1e-5:
             # 转弯
-            self.state[0] = self.state[0] + (self.state[2] * np.sin(self.state[5] * self.dt) - self.state[3] * (1 - np.cos(self.state[5] * self.dt))) / self.state[5]
-            self.state[1] = self.state[1] + (self.state[2] * (1 - np.cos(self.state[5] * self.dt)) - self.state[3] * np.sin(self.state[5] * self.dt)) / self.state[5]
-            self.state[2] = self.state[2] * np.cos(self.state[5] * self.dt) - self.state[3] * np.sin(self.state[5] * self.dt)
-            self.state[3] = self.state[2] * np.sin(self.state[5] * self.dt) + self.state[3] * np.cos(self.state[5] * self.dt)
+            omega_dt = self.state[5] * self.dt
+            sin_wt = np.sin(omega_dt)
+            cos_wt = np.cos(omega_dt)
+            vx_prev = self.state[2]
+            vy_prev = self.state[3]
+            self.state[0] = self.state[0] + (vx_prev * sin_wt - vy_prev * (1 - cos_wt)) / self.state[5]
+            self.state[1] = self.state[1] + (vx_prev * (1 - cos_wt) - vy_prev * sin_wt) / self.state[5]
+            self.state[2] = vx_prev * cos_wt - vy_prev * sin_wt
+            self.state[3] = vx_prev * sin_wt + vy_prev * cos_wt
             self.state[4] = self.state[4] + self.state[5] * self.dt  # phi = phi0 + wt
         else:
             # 直线
