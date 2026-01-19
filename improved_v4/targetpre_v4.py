@@ -94,7 +94,7 @@ class RealTarget:
                 self.state[5] = self.turn_rate
 
         # 情况 C: 在中间区域，偶尔随机改变一下转弯方向（模拟机动性）
-        elif np.random.rand() < 0.1:  # 10% 的概率随机改变转弯方向
+        if np.random.rand() < 0.1:  # 10% 的概率随机改变转弯方向
             self.state[5] = np.random.choice([-self.turn_rate, self.turn_rate])
 
         if abs(self.state[5]) > 1e-5:
