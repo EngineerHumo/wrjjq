@@ -73,7 +73,15 @@ def init_predictors_targets(map_size, obstacles, tarcfgs):
 
         initial_v = cfg["initial_v"]
         initial_phi = cfg["initial_phi"]
-        r = tp.RealTarget(ID, priority, start_belief, initial_v, initial_phi)
+        r = tp.RealTarget(
+            ID,
+            priority,
+            start_belief,
+            initial_v,
+            initial_phi,
+            v_range=v_range,
+            phi_range=theta_range
+        )
 
         predictors.append(p)
         real_targets.append(r)

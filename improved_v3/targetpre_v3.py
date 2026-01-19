@@ -2,33 +2,60 @@ import numpy as np
 from numpy.random import uniform, randn, random
 
 
+def normalize_angle(angle):
+    """
+    将角度统一归一化到 [-pi, pi] 范围
+    :param angle: 输入角度 (弧度)
+    :return: 归一化后的角度 (弧度)
+    """
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
+
 class RealTarget:
     """
     真实目标模型：'匀速转弯 (CT) 模型'
     """
-    def __init__(self, ID, priority, start_belief_pos, initial_v, initial_phi):
+    def __init__(self, ID, priority, start_belief_pos, initial_v, initial_phi, v_range=None, phi_range=None):
         self.ID = ID
         self.priority = priority
 
+        if phi_range is None:
+            phi_range = [np.radians(15), np.radians(60)]
+        else:
+            phi_range = [normalize_angle(p) for p in phi_range]
+            phi_range.sort()
+        if v_range is None:
+            v_range = [15.0, 60.0]
+
+        rad_phi = normalize_angle(np.radians(initial_phi))
         self.state = np.zeros(6)  # 状态向量: [x, y, vx, vy, phi, w]
         self.state[0:2] = start_belief_pos
-        self.state[2] = initial_v * np.cos(np.radians(initial_phi))
-        self.state[3] = initial_v * np.sin(np.radians(initial_phi))
-        self.state[4] = np.radians(initial_phi)
+        self.state[2] = initial_v * np.cos(rad_phi)
+        self.state[3] = initial_v * np.sin(rad_phi)
+        self.state[4] = rad_phi
         self.state[5] = np.radians(5)
 
         self.dt = 1.0
         self.time_step = 0
 
         # 运动参数限制
-        self.v_range = [15.0, 60.0]
+        self.v_range = v_range
         self.turn_rate = np.radians(5.0)  # 转弯速率：5度/秒
-        self.phi_range = [np.radians(15), np.radians(60)]
+        self.phi_range = phi_range
 
     def step_forward(self):
         """真实目标步进"""
-        if self.time_step == 30:
-            self.state[5] = -np.radians(5)
+        # 情况 A: 碰到了上边界 ，且当前正在向更大角度转 (w > 0)
+        if self.state[4] >= self.phi_range[1] and self.state[5] > 0:
+            self.state[5] = -self.turn_rate  # 强制改为负转速（向右转回去）
+
+        # 情况 B: 碰到了下边界，且当前正在向更小角度转 (w < 0)
+        elif self.state[4] <= self.phi_range[0] and self.state[5] < 0:
+            self.state[5] = self.turn_rate  # 强制改为正转速（向左转回去）
+
+        # 情况 C: 在中间区域，偶尔随机改变一下转弯方向（模拟机动性）
+        elif np.random.rand() < 0.1:  # 10% 的概率随机改变转弯方向
+            self.state[5] = np.random.choice([-self.turn_rate, self.turn_rate])
 
         if abs(self.state[5]) > 1e-5:
             # 转弯
@@ -42,10 +69,18 @@ class RealTarget:
             self.state[2] = vx_prev * cos_wt - vy_prev * sin_wt
             self.state[3] = vx_prev * sin_wt + vy_prev * cos_wt
             self.state[4] = self.state[4] + self.state[5] * self.dt  # phi = phi0 + wt
+            self.state[4] = normalize_angle(self.state[4])
+            self.state[4] = np.clip(self.state[4], self.phi_range[0], self.phi_range[1])
+
+            speed = np.sqrt(self.state[2] ** 2 + self.state[3] ** 2)
+            speed = np.clip(speed, self.v_range[0], self.v_range[1])
+            self.state[2] = speed * np.cos(self.state[4])
+            self.state[3] = speed * np.sin(self.state[4])
         else:
             # 直线
             self.state[0] = self.state[0] + self.state[2] * self.dt
             self.state[1] = self.state[1] + self.state[3] * self.dt
+        self.time_step += 1
 
 
 class TargetPredictor:
