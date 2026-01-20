@@ -197,6 +197,10 @@ class UAVAgent:
         self.pos = np.array(initial_pos, dtype=float)
         self.v = float(initial_v)
         self.phi = np.radians(initial_phi)
+        self.prev_out_of_bounds = False
+        self.steps_out_of_bounds = 0
+        self.prev_distance_to_bounds = 0.0
+        self.distance_to_bounds = 0.0
 
         # 约束
         self.velocity_range = [28.0, 70.0]
@@ -443,22 +447,9 @@ class UAVAgent:
         r_action = -0.05 * np.sum(action ** 2)
 
         r_collision = 0.0
+        r_boundary = 0.0
         x, y = self.pos
         M, N = map_size
-
-        # 边界约束 (软惩罚 + 越界惩罚)
-        margin = 40.0
-        boundary_weight = 1.5
-        if x < margin:
-            r_collision -= boundary_weight * (margin - x) / margin
-        elif x > N - margin:
-            r_collision -= boundary_weight * (x - (N - margin)) / margin
-        if y < margin:
-            r_collision -= boundary_weight * (margin - y) / margin
-        elif y > M - margin:
-            r_collision -= boundary_weight * (y - (M - margin)) / margin
-
-        # 越界惩罚：与越界距离成比例
         out_x = 0.0
         out_y = 0.0
         if x < 0:
@@ -469,8 +460,27 @@ class UAVAgent:
             out_y = -y
         elif y > M:
             out_y = y - M
-        if out_x > 0 or out_y > 0:
-            r_collision -= 2.5 * (out_x + out_y) / margin
+        self.distance_to_bounds = float(np.hypot(out_x, out_y))
+        out_of_bounds = out_x > 0.0 or out_y > 0.0
+
+        if out_of_bounds:
+            if not self.prev_out_of_bounds:
+                r_boundary -= 5.0
+                self.steps_out_of_bounds = 1
+            else:
+                self.steps_out_of_bounds += 1
+            if self.distance_to_bounds >= self.prev_distance_to_bounds:
+                r_boundary -= 0.1
+        else:
+            if self.prev_out_of_bounds:
+                steps = self.steps_out_of_bounds
+                if steps > 20:
+                    decay_steps = min(steps, 40) - 20
+                    return_reward = 3.0 - decay_steps * 0.1
+                else:
+                    return_reward = 3.0
+                r_boundary += max(return_reward, 1.0)
+            self.steps_out_of_bounds = 0
 
         # 障碍物约束
         if obstacles_map is not None and 0 <= x < N and 0 <= y < M:
@@ -487,7 +497,10 @@ class UAVAgent:
             if d < safe_dist:
                 r_collision -= 5.0 * (1.0 - d / safe_dist)
 
-        total_reward = r_info + r_detect + r_action + r_collision
+        self.prev_out_of_bounds = out_of_bounds
+        self.prev_distance_to_bounds = self.distance_to_bounds
+
+        total_reward = r_info + r_detect + r_action + r_collision + r_boundary
         return total_reward
 
 
