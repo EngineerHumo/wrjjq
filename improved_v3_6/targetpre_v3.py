@@ -11,10 +11,17 @@ def normalize_angle(angle):
     return (angle + np.pi) % (2 * np.pi) - np.pi
 
 
+def normalize_angle_preserve_pi(angle):
+    angle_norm = normalize_angle(angle)
+    if np.isclose(angle_norm, -np.pi) and np.isclose((angle % (2 * np.pi)), np.pi):
+        return np.pi
+    return angle_norm
+
+
 def angle_in_range(phi, low, high):
     phi = normalize_angle(phi)
-    low = normalize_angle(low)
-    high = normalize_angle(high)
+    low = normalize_angle_preserve_pi(low)
+    high = normalize_angle_preserve_pi(high)
     if low <= high:
         return low <= phi <= high
     return phi >= low or phi <= high
@@ -24,8 +31,8 @@ def clamp_angle_to_range(phi, low, high):
     phi = normalize_angle(phi)
     if angle_in_range(phi, low, high):
         return phi
-    low = normalize_angle(low)
-    high = normalize_angle(high)
+    low = normalize_angle_preserve_pi(low)
+    high = normalize_angle_preserve_pi(high)
     dist_low = abs(normalize_angle(phi - low))
     dist_high = abs(normalize_angle(phi - high))
     return low if dist_low <= dist_high else high
@@ -43,7 +50,7 @@ class RealTarget:
         if phi_range is None:
             phi_range = [np.radians(15), np.radians(60)]
         else:
-            phi_range = [normalize_angle(p) for p in phi_range]
+            phi_range = [normalize_angle_preserve_pi(p) for p in phi_range]
         if v_range is None:
             v_range = [15.0, 60.0]
 
