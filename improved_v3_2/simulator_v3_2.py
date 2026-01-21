@@ -333,11 +333,12 @@ def train_with_improvements():
 
     reward_history = []
     noise_history = []
-    MAX_EPISODES = 15000
+    MAX_EPISODES = 16000
     MAX_STEPS = 100
     BATCH_SIZE = 512
     noise_std = 0.3
     min_noise = 0.05
+    noise_decay = 0.996
     noise_decay_interval = 100
     noise_decay_start = 13000
     noise_decay_ratio = 0.9
@@ -381,6 +382,7 @@ def train_with_improvements():
             uav.v = uav_configs[i]["initial_v"]
             uav.phi = np.radians(uav_configs[i]["phi"])
             uav.assigned_task_coords = None
+            uav.reset_episode()
 
         episode_reward = 0
 
@@ -407,7 +409,10 @@ def train_with_improvements():
             next_obs_list = []
             reward_list = []
             done_list = []
-            uav_detection_states = [False] * len(uav_list)
+            uav_detected_any = [False] * len(uav_list)
+            uav_detected_targets = [set() for _ in range(len(uav_list))]
+            uav_detected_nearest = [-1] * len(uav_list)
+            uav_detected_nearest_dist = [float("inf")] * len(uav_list)
 
             # 无人机运动
             for i, uav in enumerate(uav_list):
@@ -427,7 +432,11 @@ def train_with_improvements():
                     is_detected = (dist < 250.0) and (np.random.rand() < 0.9)
                     temp_state = {"detected": is_detected, "measurement": None, "uavpos": u.pos, "uavdp": u.detecct_p}
                     if is_detected:
-                        uav_detection_states[u_idx] = True
+                        uav_detected_any[u_idx] = True
+                        uav_detected_targets[u_idx].add(i)
+                        if dist < uav_detected_nearest_dist[u_idx]:
+                            uav_detected_nearest_dist[u_idx] = dist
+                            uav_detected_nearest[u_idx] = i
                         temp_state["measurement"] = real_pos + np.random.randn(2) * meas_noise_std
                         sum_z += temp_state["measurement"]
                         sum_detected += 1
@@ -456,7 +465,9 @@ def train_with_improvements():
                 r = uav.calculate_reward(
                     prev_entropy=local_entropy_before[i],
                     curr_entropy=local_entropy_after[i],
-                    is_detected=uav_detection_states[i],
+                    detected_any=uav_detected_any[i],
+                    detected_targets=uav_detected_targets[i],
+                    nearest_target=uav_detected_nearest[i],
                     action=action_list[i],
                     map_size=map_size,
                     obstacles_map=obs_map,
@@ -483,8 +494,12 @@ def train_with_improvements():
                 for _ in range(2):
                     RL.train_centralized(uav_list, global_buffer, BATCH_SIZE)
 
-        if (episode + 1) > noise_decay_start and (episode + 1 - noise_decay_start) % noise_decay_interval == 0:
-            noise_std = max(min_noise, noise_std * noise_decay_ratio)
+        if (episode + 1) < noise_decay_start:
+            noise_std = max(min_noise, noise_std * noise_decay)
+        elif (episode + 1) == noise_decay_start:
+            noise_std = min_noise
+        elif (episode + 1 - noise_decay_start) % noise_decay_interval == 0:
+            noise_std = noise_std * noise_decay_ratio
         avg_reward = episode_reward / len(uav_list)
         reward_history.append(avg_reward)
         noise_history.append(noise_std)

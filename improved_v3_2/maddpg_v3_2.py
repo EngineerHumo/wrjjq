@@ -227,6 +227,14 @@ class UAVAgent:
                             actor_lr, critic_lr, tau, gamma)
 
         self.assigned_task_coords = None
+        self.tracking_target_id = None
+        self.detect_streak = 0
+        self.lost_streak = 0
+
+    def reset_episode(self):
+        self.tracking_target_id = None
+        self.detect_streak = 0
+        self.lost_streak = 0
 
     @staticmethod
     def _compute_global_belief_direction(agent_pos, map_size, target_predictors):
@@ -433,8 +441,8 @@ class UAVAgent:
         bid = 0.5 * priority / 5 - 0.5 * (time_cost / 1200.0)  # 归一化处理
         return bid
 
-    def calculate_reward(self, prev_entropy, curr_entropy, is_detected, action, map_size, obstacles_map, all_uavs,
-                         target_predictors=None):
+    def calculate_reward(self, prev_entropy, curr_entropy, detected_any, detected_targets, action, map_size,
+                         obstacles_map, all_uavs, target_predictors=None, nearest_target=None):
         """
         最小化熵 + 探测保持 + 安全约束
         """
@@ -442,12 +450,41 @@ class UAVAgent:
         # 放大系数 10.0 是经验值（调节RL收敛速度），不影响物理参数
         r_info = (prev_entropy - curr_entropy) * 10.0
 
-        # 2. 探测奖励 (Detection)
-        # 探测到目标给予高额奖励
-        r_detect = 10.0 if is_detected else 0.0
+        # 2. 跟踪奖励 (Tracking)
+        r_track = 0.0
+        ACQUIRE_REWARD = 6.0
+        REACQUIRE_REWARD = 1.5
+        KEEP_REWARD = 1.0
+        LOST_PENALTY = 2.0
+        LOST_TOL = 5
+        TRACK_DIST_W = 0.2
+        UNCERT_TRACK_SCALE = 0.0
+
+        detected_targets = detected_targets or set()
+        if self.tracking_target_id is None:
+            if detected_targets:
+                if nearest_target is not None and nearest_target in detected_targets:
+                    lock_id = nearest_target
+                else:
+                    lock_id = min(detected_targets)
+                self.tracking_target_id = lock_id
+                self.detect_streak = 1
+                r_track += REACQUIRE_REWARD if self.lost_streak > 0 else ACQUIRE_REWARD
+                self.lost_streak = 0
+        else:
+            if self.tracking_target_id in detected_targets:
+                self.detect_streak += 1
+                self.lost_streak = 0
+                r_track += KEEP_REWARD
+            else:
+                self.lost_streak += 1
+                self.detect_streak = 0
+                r_track -= LOST_PENALTY
+                if self.lost_streak >= LOST_TOL:
+                    self.tracking_target_id = None
 
         # 3. 动作与安全 (保持你原有的参数不变)
-        r_action = -0.05 * np.sum(action ** 2)
+        r_action = -0.03 * np.sum(action ** 2)
 
         r_collision = 0.0
         r_boundary = 0.0
@@ -507,10 +544,27 @@ class UAVAgent:
                 alignment = float(np.dot(move_dir, grad_dir))
                 r_uncertainty = 0.5 * alignment * np.tanh(grad_norm)
 
+        if self.tracking_target_id is not None:
+            r_uncertainty *= UNCERT_TRACK_SCALE
+            if target_predictors and 0 <= self.tracking_target_id < len(target_predictors):
+                est_pos = target_predictors[self.tracking_target_id].state_si[0:2]
+                dist = np.linalg.norm(self.pos - est_pos)
+                dist_norm = min(dist / self.detect_radius, 1.0)
+                r_track -= TRACK_DIST_W * dist_norm
+
+            same_target = 0
+            for other in all_uavs:
+                if other is self:
+                    continue
+                if getattr(other, "tracking_target_id", None) == self.tracking_target_id:
+                    same_target += 1
+            if same_target > 0:
+                r_track -= 0.5 * same_target
+
         self.prev_out_of_bounds = out_of_bounds
         self.prev_distance_to_bounds = self.distance_to_bounds
 
-        total_reward = r_info + r_detect + r_action + r_collision + r_boundary + r_uncertainty
+        total_reward = r_info + r_track + r_action + r_collision + r_boundary + r_uncertainty
         return total_reward
 
 
