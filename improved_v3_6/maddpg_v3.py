@@ -464,6 +464,7 @@ class UAVAgent:
                     next_x = self.pos[0]
                     next_y = self.pos[1]
                     self.phi += np.pi  # 简单掉头处理
+                    self.phi = (self.phi + np.pi) % (2 * np.pi) - np.pi
 
         # 确认更新
         self.pos = np.array([next_x, next_y])
