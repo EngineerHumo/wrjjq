@@ -13,7 +13,7 @@ def normalize_angle(angle):
 
 def normalize_angle_preserve_pi(angle):
     angle_norm = normalize_angle(angle)
-    if np.isclose(angle_norm, -np.pi) and np.isclose((angle % (2 * np.pi)), np.pi):
+    if np.isclose(angle_norm, -np.pi) and angle > 0:
         return np.pi
     return angle_norm
 
