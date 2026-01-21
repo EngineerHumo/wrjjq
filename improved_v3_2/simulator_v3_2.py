@@ -338,8 +338,8 @@ def train_with_improvements():
     BATCH_SIZE = 512
     noise_std = 0.3
     min_noise = 0.05
-    noise_decay_interval = 1000
-    noise_decay_start = 3000
+    noise_decay_interval = 100
+    noise_decay_start = 13000
     noise_decay_ratio = 0.9
     eval_interval = 200
 
