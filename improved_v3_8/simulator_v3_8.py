@@ -57,17 +57,35 @@ def save_reward_history(output_dir, reward_history, noise_history):
 def save_tracking_metrics(output_dir, metrics_history):
     ensure_dir(output_dir)
     csv_path = os.path.join(output_dir, "tracking_metrics.csv")
+    if not metrics_history:
+        return
+
+    cols = [
+        "episode",
+        "avg_detect_streak",
+        "avg_lost_streak",
+        "lock_count",
+        "lock_time_ratio",
+        "target_covered_ratio",
+        "avg_r_info",
+        "avg_r_uncertainty",
+        "avg_r_track",
+        "avg_r_action",
+        "avg_r_collision",
+        "avg_r_out",
+        "avg_total_raw",
+    ]
     with open(csv_path, "w", encoding="utf-8") as f:
-        f.write("episode,avg_detect_streak,avg_lost_streak,lock_count,lock_time_ratio,target_covered_ratio\n")
+        f.write(",".join(cols) + "\n")
         for item in metrics_history:
-            f.write(
-                f"{item['episode']},"
-                f"{item['avg_detect_streak']:.6f},"
-                f"{item['avg_lost_streak']:.6f},"
-                f"{item['lock_count']},"
-                f"{item['lock_time_ratio']:.6f},"
-                f"{item['target_covered_ratio']:.6f}\n"
-            )
+            row = []
+            for c in cols:
+                v = item.get(c, 0.0)
+                if isinstance(v, float):
+                    row.append(f"{v:.6f}")
+                else:
+                    row.append(str(v))
+            f.write(",".join(row) + "\n")
 
 
 def save_config(output_dir, config):
@@ -98,7 +116,8 @@ def init_predictors_targets(map_size, obstacles, tarcfgs):
             initial_phi,
             v_range=v_range,
             phi_range=theta_range,
-            map_size=map_size
+            map_size=map_size,
+            random_turn_prob=cfg.get("random_turn_prob", 0.0)
         )
 
         predictors.append(p)
@@ -295,27 +314,54 @@ def train_with_improvements():
         if 0 <= r < map_size[0] and 0 <= c < map_size[1]:
             obs_map[r, c] = -1
 
-    def generate_random_tarcfgs(num_targets):
+    def generate_tarcfgs(episode, num_targets):
+        """Curriculum for target motion/randomization to keep training stable.
+
+        Stage 0 (ep < 3000): fixed targets (close to v3), narrow heading ranges, moderate speed.
+        Stage 1 (3000-6000): small randomization around fixed anchors, still narrow heading.
+        Stage 2 (>= 6000): broader randomization, full heading range, still keep margin from boundary.
+        """
         tarcfgs = []
+        anchors = [
+            (500.0, 500.0),
+            (1500.0, 1500.0),
+            (500.0, 1500.0),
+            (1500.0, 500.0),
+        ]
+        margin = 150.0
         for tid in range(1, num_targets + 1):
-            x = float(np.random.uniform(0, map_size[1]))
-            y = float(np.random.uniform(0, map_size[0]))
-            v_range = (15, 60)
+            if episode < 3000:
+                x, y = anchors[(tid - 1) % len(anchors)]
+                theta_range = (np.radians(-30.0), np.radians(30.0))
+                v_range = (20.0, 50.0)
+            elif episode < 6000:
+                base_x, base_y = anchors[(tid - 1) % len(anchors)]
+                x = float(np.clip(np.random.normal(base_x, 80.0), margin, map_size[1] - margin))
+                y = float(np.clip(np.random.normal(base_y, 80.0), margin, map_size[0] - margin))
+                theta_range = (np.radians(-45.0), np.radians(45.0))
+                v_range = (20.0, 60.0)
+            else:
+                x = float(np.random.uniform(margin, map_size[1] - margin))
+                y = float(np.random.uniform(margin, map_size[0] - margin))
+                theta_range = (-np.pi, np.pi)
+                v_range = (15.0, 60.0)
+
             initial_v = float(np.random.uniform(v_range[0], v_range[1]))
-            initial_phi = float(np.random.uniform(-180.0, 180.0))
+            initial_phi = float(np.random.uniform(np.degrees(theta_range[0]), np.degrees(theta_range[1])))
             tarcfgs.append({
                 "ID": tid,
                 "pos": (x, y),
                 "priority": 1,
                 "v_range": v_range,
-                "theta_range": (-np.pi, np.pi),
+                "theta_range": theta_range,
                 "initial_v": initial_v,
-                "initial_phi": initial_phi
+                "initial_phi": initial_phi,
+                "random_turn_prob": 0.0,
             })
         return tarcfgs
 
     # 初始化 MADDPG 系统
-    state_dim = 15
+    state_dim = 23
     action_dim = 2
     # 无人机参数配置
     uav_configs = [
@@ -363,7 +409,8 @@ def train_with_improvements():
     noise_decay = 0.996
     eval_interval = 200
 
-    reward_scaler = RL.RewardScaler(shape=(1,))  # 初始化奖励归一化器
+    USE_REWARD_SCALER = False  # stability-first: disable step-level reward scaling
+    reward_scaler = RL.RewardScaler(shape=(1,))  # optional (only used if USE_REWARD_SCALER=True)
 
     output_root = os.path.join(os.path.dirname(__file__), "outputs")
     models_dir = os.path.join(output_root, "models")
@@ -393,7 +440,7 @@ def train_with_improvements():
     # 训练主循环
     print("开始训练 Improved MADDPG")
     for episode in range(MAX_EPISODES):
-        tarcfgs = generate_random_tarcfgs(2)
+        tarcfgs = generate_tarcfgs(episode, 2)
         predictors, real_targets = init_predictors_targets(map_size, obstacles, tarcfgs)
 
         # 重置无人机部分参数
@@ -405,6 +452,8 @@ def train_with_improvements():
             uav.reset_episode()
 
         episode_reward = 0
+        episode_raw_rewards = []  # for optional reward scaler update
+        reward_comp_sums = {k: 0.0 for k in ["r_info", "r_uncertainty", "r_track", "r_action", "r_collision", "r_out", "total_raw"]}
         detect_streak_sum = 0.0
         lost_streak_sum = 0.0
         lock_time_steps = 0
@@ -434,10 +483,17 @@ def train_with_improvements():
             next_obs_list = []
             reward_list = []
             done_list = []
+            # Stochastic detection (for measurement update)
             uav_detected_any = [False] * len(uav_list)
             uav_detected_targets = [set() for _ in range(len(uav_list))]
             uav_detected_nearest = [-1] * len(uav_list)
             uav_detected_nearest_dist = [float("inf")] * len(uav_list)
+
+            # Deterministic in-range flag (for tracking/reward stability)
+            uav_in_range_any = [False] * len(uav_list)
+            uav_in_range_targets = [set() for _ in range(len(uav_list))]
+            uav_in_range_nearest = [-1] * len(uav_list)
+            uav_in_range_nearest_dist = [float("inf")] * len(uav_list)
 
             # 无人机运动
             for i, uav in enumerate(uav_list):
@@ -454,7 +510,17 @@ def train_with_improvements():
                 sum_detected = 0
                 for u_idx, u in enumerate(uav_list):
                     dist = np.linalg.norm(u.pos - real_pos)
-                    is_detected = (dist < 250.0) and (np.random.rand() < 0.9)
+                    # Deterministic in-range bookkeeping (no randomness)
+                    in_range = dist < 250.0
+                    if in_range:
+                        uav_in_range_any[u_idx] = True
+                        uav_in_range_targets[u_idx].add(i)
+                        if dist < uav_in_range_nearest_dist[u_idx]:
+                            uav_in_range_nearest_dist[u_idx] = dist
+                            uav_in_range_nearest[u_idx] = i
+
+                    # Stochastic detection used only for measurement update
+                    is_detected = in_range and (np.random.rand() < 0.9)
                     temp_state = {"detected": is_detected, "measurement": None, "uavpos": u.pos, "uavdp": u.detecct_p}
                     if is_detected:
                         uav_detected_any[u_idx] = True
@@ -483,7 +549,7 @@ def train_with_improvements():
 
             tracking_events = []
             for i, uav in enumerate(uav_list):
-                event = uav.update_tracking_state(uav_detected_targets[i], uav_detected_nearest[i])
+                event = uav.update_tracking_state(uav_in_range_targets[i], uav_in_range_nearest[i])
                 tracking_events.append(event)
                 if event in {"acquire", "reacquire"}:
                     lock_event_count += 1
@@ -497,7 +563,7 @@ def train_with_improvements():
             detect_streak_sum += sum(uav.detect_streak for uav in uav_list)
             lost_streak_sum += sum(uav.lost_streak for uav in uav_list)
             for target_idx in range(len(predictors)):
-                if any(target_idx in targets for targets in uav_detected_targets):
+                if any(target_idx in targets for targets in uav_in_range_targets):
                     target_covered_steps[target_idx] += 1
 
             # 观测下一帧 & 计算奖励
@@ -506,23 +572,31 @@ def train_with_improvements():
                 next_obs_list.append(next_obs)
                 uav.last_obs = next_obs
 
-                r = uav.calculate_reward(
+                r, r_comp = uav.calculate_reward(
                     prev_entropy=local_entropy_before[i],
                     curr_entropy=local_entropy_after[i],
-                    detected_any=uav_detected_any[i],
-                    detected_targets=uav_detected_targets[i],
-                    nearest_target=uav_detected_nearest[i],
+                    detected_any=uav_in_range_any[i],
+                    detected_targets=uav_in_range_targets[i],
+                    nearest_target=uav_in_range_nearest[i],
                     same_target_lock_count=lock_count.get(uav.tracking_target_id, 0),
                     action=action_list[i],
                     map_size=map_size,
                     obstacles_map=obs_map,
                     all_uavs=uav_list,
-                    predictors=predictors
+                    predictors=predictors,
+                    return_components=True
                 )
 
-                r_input = np.array([r])
-                r_norm = reward_scaler(r_input)[0]
-                r_final = np.clip(r_norm, -5.0, 5.0)
+                for comp_key in reward_comp_sums:
+                    reward_comp_sums[comp_key] += r_comp[comp_key]
+                episode_raw_rewards.append(float(r))
+
+                r_input = np.array([r], dtype=float)
+                if USE_REWARD_SCALER:
+                    r_scaled = reward_scaler(r_input)[0]
+                    r_final = float(np.clip(r_scaled, -5.0, 5.0))
+                else:
+                    r_final = float(np.clip(r, -5.0, 5.0))
 
                 reward_list.append(r_final)
 
@@ -551,7 +625,11 @@ def train_with_improvements():
         noise_history.append(noise_std)
         print(f"Episode {episode + 1}/{MAX_EPISODES} | Avg Reward: {avg_reward:.2f} | Noise: {noise_std:.3f}")
 
+        if USE_REWARD_SCALER and len(episode_raw_rewards) > 0:
+            reward_scaler.update(np.array(episode_raw_rewards, dtype=float).reshape(-1, 1))
+
         total_samples = MAX_STEPS * len(uav_list)
+        avg_reward_comps = {f"avg_{k}": (reward_comp_sums[k] / total_samples) for k in reward_comp_sums}
         avg_detect_streak = detect_streak_sum / total_samples if total_samples > 0 else 0.0
         avg_lost_streak = lost_streak_sum / total_samples if total_samples > 0 else 0.0
         lock_time_ratio = lock_time_steps / total_samples if total_samples > 0 else 0.0
@@ -562,7 +640,8 @@ def train_with_improvements():
             "avg_lost_streak": avg_lost_streak,
             "lock_count": lock_event_count,
             "lock_time_ratio": lock_time_ratio,
-            "target_covered_ratio": target_covered_ratio
+            "target_covered_ratio": target_covered_ratio,
+            **avg_reward_comps
         })
 
         if (episode + 1) % 200 == 0:
