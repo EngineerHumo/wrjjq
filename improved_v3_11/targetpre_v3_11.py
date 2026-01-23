@@ -74,23 +74,25 @@ class RealTarget:
 
     def step_forward(self):
         """真实目标步进"""
-        next_phi = normalize_angle(self.state[4] + self.state[5] * self.dt)
-        if abs(self.state[5]) > 1e-5 and not angle_in_range(next_phi, self.phi_range[0], self.phi_range[1]):
-            self.state[5] = -np.sign(self.state[5]) * self.turn_rate
+        near_boundary = self._near_boundary()
+        if not near_boundary:
+            next_phi = normalize_angle(self.state[4] + self.state[5] * self.dt)
+            if abs(self.state[5]) > 1e-5 and not angle_in_range(next_phi, self.phi_range[0], self.phi_range[1]):
+                self.state[5] = -np.sign(self.state[5]) * self.turn_rate
 
-        # 情况 A: 碰到了上边界 ，且当前正在向更大角度转 (w > 0)
-        if self.state[5] > 0 and not angle_in_range(self.state[4] + self.turn_rate * self.dt,
-                                                     self.phi_range[0], self.phi_range[1]):
-            self.state[5] = -self.turn_rate  # 强制改为负转速（向右转回去）
+            # 情况 A: 碰到了上边界 ，且当前正在向更大角度转 (w > 0)
+            if self.state[5] > 0 and not angle_in_range(self.state[4] + self.turn_rate * self.dt,
+                                                         self.phi_range[0], self.phi_range[1]):
+                self.state[5] = -self.turn_rate  # 强制改为负转速（向右转回去）
 
-        # 情况 B: 碰到了下边界，且当前正在向更小角度转 (w < 0)
-        elif self.state[5] < 0 and not angle_in_range(self.state[4] - self.turn_rate * self.dt,
-                                                       self.phi_range[0], self.phi_range[1]):
-            self.state[5] = self.turn_rate  # 强制改为正转速（向左转回去）
+            # 情况 B: 碰到了下边界，且当前正在向更小角度转 (w < 0)
+            elif self.state[5] < 0 and not angle_in_range(self.state[4] - self.turn_rate * self.dt,
+                                                           self.phi_range[0], self.phi_range[1]):
+                self.state[5] = self.turn_rate  # 强制改为正转速（向左转回去）
 
-        # 情况 C: 在中间区域，偶尔随机改变一下转弯方向（模拟机动性）
-        elif np.random.rand() < self.random_turn_prob:
-            self.state[5] = np.random.choice([-self.turn_rate, self.turn_rate])
+            # 情况 C: 在中间区域，偶尔随机改变一下转弯方向（模拟机动性）
+            elif np.random.rand() < self.random_turn_prob:
+                self.state[5] = np.random.choice([-self.turn_rate, self.turn_rate])
 
         if abs(self.state[5]) > 1e-5:
             # 转弯
@@ -105,7 +107,6 @@ class RealTarget:
             self.state[3] = vx_prev * sin_wt + vy_prev * cos_wt
             self.state[4] = self.state[4] + self.state[5] * self.dt  # phi = phi0 + wt
             self.state[4] = normalize_angle(self.state[4])
-            self.state[4] = clamp_angle_to_range(self.state[4], self.phi_range[0], self.phi_range[1])
 
             speed = np.sqrt(self.state[2] ** 2 + self.state[3] ** 2)
             speed = np.clip(speed, self.v_range[0], self.v_range[1])
@@ -115,12 +116,26 @@ class RealTarget:
             # 直线
             self.state[0] = self.state[0] + self.state[2] * self.dt
             self.state[1] = self.state[1] + self.state[3] * self.dt
-        self._apply_boundary_reflection()
+        reflected = self._apply_boundary_reflection()
+        if (not reflected) and (not near_boundary) and abs(self.state[5]) > 1e-5:
+            speed = np.sqrt(self.state[2] ** 2 + self.state[3] ** 2)
+            speed = np.clip(speed, self.v_range[0], self.v_range[1])
+            self.state[4] = clamp_angle_to_range(self.state[4], self.phi_range[0], self.phi_range[1])
+            self.state[2] = speed * np.cos(self.state[4])
+            self.state[3] = speed * np.sin(self.state[4])
         self.time_step += 1
+
+    def _near_boundary(self):
+        if self.map_size is None:
+            return False
+        M, N = self.map_size
+        x, y = self.state[0], self.state[1]
+        margin = max(self.v_range[1] * self.dt, 1.0)
+        return x <= margin or x >= (N - margin) or y <= margin or y >= (M - margin)
 
     def _apply_boundary_reflection(self):
         if self.map_size is None:
-            return
+            return False
         M, N = self.map_size
         x, y = self.state[0], self.state[1]
         vx, vy = self.state[2], self.state[3]
@@ -153,6 +168,7 @@ class RealTarget:
             self.state[4] = phi
             self.state[2] = speed * np.cos(phi)
             self.state[3] = speed * np.sin(phi)
+        return reflected
 
 
 class TargetPredictor:
