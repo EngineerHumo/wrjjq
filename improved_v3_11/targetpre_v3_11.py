@@ -105,7 +105,6 @@ class RealTarget:
             self.state[3] = vx_prev * sin_wt + vy_prev * cos_wt
             self.state[4] = self.state[4] + self.state[5] * self.dt  # phi = phi0 + wt
             self.state[4] = normalize_angle(self.state[4])
-            self.state[4] = clamp_angle_to_range(self.state[4], self.phi_range[0], self.phi_range[1])
 
             speed = np.sqrt(self.state[2] ** 2 + self.state[3] ** 2)
             speed = np.clip(speed, self.v_range[0], self.v_range[1])
@@ -115,12 +114,18 @@ class RealTarget:
             # 直线
             self.state[0] = self.state[0] + self.state[2] * self.dt
             self.state[1] = self.state[1] + self.state[3] * self.dt
-        self._apply_boundary_reflection()
+        reflected = self._apply_boundary_reflection()
+        if (not reflected) and abs(self.state[5]) > 1e-5:
+            speed = np.sqrt(self.state[2] ** 2 + self.state[3] ** 2)
+            speed = np.clip(speed, self.v_range[0], self.v_range[1])
+            self.state[4] = clamp_angle_to_range(self.state[4], self.phi_range[0], self.phi_range[1])
+            self.state[2] = speed * np.cos(self.state[4])
+            self.state[3] = speed * np.sin(self.state[4])
         self.time_step += 1
 
     def _apply_boundary_reflection(self):
         if self.map_size is None:
-            return
+            return False
         M, N = self.map_size
         x, y = self.state[0], self.state[1]
         vx, vy = self.state[2], self.state[3]
@@ -153,6 +158,7 @@ class RealTarget:
             self.state[4] = phi
             self.state[2] = speed * np.cos(phi)
             self.state[3] = speed * np.sin(phi)
+        return reflected
 
 
 class TargetPredictor:
