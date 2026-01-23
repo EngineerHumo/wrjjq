@@ -43,7 +43,7 @@ class RealTarget:
     真实目标模型：'匀速转弯 (CT) 模型'
     """
     def __init__(self, ID, priority, start_belief_pos, initial_v, initial_phi,
-                 v_range=None, phi_range=None, map_size=None, random_turn_prob=0.0):
+                 v_range=None, phi_range=None, map_size=None):
         self.ID = ID
         self.priority = priority
 
@@ -70,7 +70,6 @@ class RealTarget:
         self.turn_rate = np.radians(5.0)  # 转弯速率：5度/秒
         self.phi_range = phi_range
         self.map_size = map_size
-        self.random_turn_prob = float(random_turn_prob)
 
     def step_forward(self):
         """真实目标步进"""
@@ -89,7 +88,7 @@ class RealTarget:
             self.state[5] = self.turn_rate  # 强制改为正转速（向左转回去）
 
         # 情况 C: 在中间区域，偶尔随机改变一下转弯方向（模拟机动性）
-        elif np.random.rand() < self.random_turn_prob:
+        elif np.random.rand() < 0.1:  # 10% 的概率随机改变转弯方向
             self.state[5] = np.random.choice([-self.turn_rate, self.turn_rate])
 
         if abs(self.state[5]) > 1e-5:
@@ -126,27 +125,23 @@ class RealTarget:
         vx, vy = self.state[2], self.state[3]
         reflected = False
 
-        while x < 0 or x > N:
-            if x < 0:
-                x = -x
-                vx = -vx
-            elif x > N:
-                x = 2 * N - x
-                vx = -vx
-            reflected = True
+        def reflect_axis(pos, vel, limit):
+            axis_reflected = False
+            while pos < 0 or pos > limit:
+                axis_reflected = True
+                if pos < 0:
+                    pos = -pos
+                    vel = -vel
+                elif pos > limit:
+                    pos = 2 * limit - pos
+                    vel = -vel
+            return pos, vel, axis_reflected
 
-        while y < 0 or y > M:
-            if y < 0:
-                y = -y
-                vy = -vy
-            elif y > M:
-                y = 2 * M - y
-                vy = -vy
-            reflected = True
+        x, vx, reflected_x = reflect_axis(x, vx, N)
+        y, vy, reflected_y = reflect_axis(y, vy, M)
+        reflected = reflected_x or reflected_y
 
         if reflected:
-            x = float(np.clip(x, 0.0, N))
-            y = float(np.clip(y, 0.0, M))
             speed = np.hypot(vx, vy)
             speed = np.clip(speed, self.v_range[0], self.v_range[1])
             phi = normalize_angle(np.arctan2(vy, vx))

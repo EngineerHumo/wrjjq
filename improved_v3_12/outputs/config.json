@@ -1,0 +1,20 @@
+{
+  "MAP_SIZE": [
+    2000,
+    2000
+  ],
+  "N": 5,
+  "MAX_STEPS": 100,
+  "MAX_EPISODES": 16000,
+  "actor_lr": 0.0001,
+  "critic_lr": 0.001,
+  "gamma": 0.99,
+  "seed": null,
+  "eval_interval": 200,
+  "curriculum": {
+    "stage1_episodes": 3000,
+    "stage2_episodes": 5000,
+    "stage2_pos_jitter": 50.0,
+    "stage2_angle_jitter_deg": 30.0
+  }
+}
