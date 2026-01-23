@@ -317,8 +317,8 @@ def train_with_improvements():
     def generate_tarcfgs(episode, num_targets):
         """Curriculum for target motion/randomization to keep training stable.
 
-        Stage 0 (ep < 3000): fixed targets (close to v3), narrow heading ranges, moderate speed.
-        Stage 1 (3000-6000): small randomization around fixed anchors, still narrow heading.
+        Stage 0 (ep < 3000): fixed targets (close to v3), moderate speed.
+        Stage 1 (3000-6000): small randomization around fixed anchors.
         Stage 2 (>= 6000): broader randomization, full heading range, still keep margin from boundary.
         """
         tarcfgs = []
@@ -332,19 +332,18 @@ def train_with_improvements():
         for tid in range(1, num_targets + 1):
             if episode < 3000:
                 x, y = anchors[(tid - 1) % len(anchors)]
-                theta_range = (np.radians(-30.0), np.radians(30.0))
                 v_range = (20.0, 50.0)
             elif episode < 6000:
                 base_x, base_y = anchors[(tid - 1) % len(anchors)]
                 x = float(np.clip(np.random.normal(base_x, 80.0), margin, map_size[1] - margin))
                 y = float(np.clip(np.random.normal(base_y, 80.0), margin, map_size[0] - margin))
-                theta_range = (np.radians(-45.0), np.radians(45.0))
                 v_range = (20.0, 60.0)
             else:
                 x = float(np.random.uniform(margin, map_size[1] - margin))
                 y = float(np.random.uniform(margin, map_size[0] - margin))
-                theta_range = (-np.pi, np.pi)
                 v_range = (15.0, 60.0)
+
+            theta_range = (-np.pi, np.pi)
 
             initial_v = float(np.random.uniform(v_range[0], v_range[1]))
             initial_phi = float(np.random.uniform(np.degrees(theta_range[0]), np.degrees(theta_range[1])))
