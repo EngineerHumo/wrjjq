@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import maddpg_v3_8 as RL
-import targetpre_v3_8 as tp
+import targetpre_v3_9 as tp
 
 os.environ["OMP_NUM_THREADS"] = "1"
 matplotlib.use("Agg")

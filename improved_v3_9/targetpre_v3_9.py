@@ -126,25 +126,27 @@ class RealTarget:
         vx, vy = self.state[2], self.state[3]
         reflected = False
 
-        if x < 0:
-            x = -x
-            vx = -vx
-            reflected = True
-        elif x > N:
-            x = 2 * N - x
-            vx = -vx
+        while x < 0 or x > N:
+            if x < 0:
+                x = -x
+                vx = -vx
+            elif x > N:
+                x = 2 * N - x
+                vx = -vx
             reflected = True
 
-        if y < 0:
-            y = -y
-            vy = -vy
-            reflected = True
-        elif y > M:
-            y = 2 * M - y
-            vy = -vy
+        while y < 0 or y > M:
+            if y < 0:
+                y = -y
+                vy = -vy
+            elif y > M:
+                y = 2 * M - y
+                vy = -vy
             reflected = True
 
         if reflected:
+            x = float(np.clip(x, 0.0, N))
+            y = float(np.clip(y, 0.0, M))
             speed = np.hypot(vx, vy)
             speed = np.clip(speed, self.v_range[0], self.v_range[1])
             phi = normalize_angle(np.arctan2(vy, vx))
