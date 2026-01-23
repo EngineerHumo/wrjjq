@@ -6,12 +6,18 @@ import torch.nn.functional as F
 # 检查是否有GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-ACQUIRE_REWARD = 6.0
-REACQUIRE_REWARD = 1.5
-KEEP_REWARD = 1.0
-LOST_PENALTY = 2.0
+# --- Tracking reward shaping (stability-first; tuned for detection success) ---
+ACQUIRE_REWARD = 2.0
+REACQUIRE_REWARD = 0.5
+KEEP_REWARD = 0.1
+UNLOCK_PENALTY = 1.0       # only applied when unlock happens (after LOST_TOL)
 LOST_TOL = 5
-TRACK_DIST_W = 0.2
+
+TRACK_DIST_W = 0.15
+DIST_PROGRESS_W = 0.05     # reward for moving closer to locked target estimate
+SAME_TARGET_PENALTY_W = 0.0  # disable coupling penalty for stability
+
+R_UNCERT_SCALE = 0.005     # exploration reward scale (only when not in-range & not locked)
 UNCERT_TRACK_SCALE = 0.0
 
 
@@ -225,7 +231,7 @@ class UAVAgent:
         self.detecct_p = 0.9
 
         # 状态与动作维度
-        self.state_dim = 15
+        self.state_dim = 23
         self.action_dim = 2
         self.max_action_tensor = torch.tensor([1.0, 1.0]).to(device)
 
@@ -250,7 +256,16 @@ class UAVAgent:
         self.prev_tracking_target_id = None
 
     def update_tracking_state(self, detected_targets, nearest_target):
+        """Update lock state based on (preferably deterministic) in-range detections.
+
+        Notes:
+          - 'lost' does NOT apply any reward penalty (too noisy).
+          - Only when lost streak reaches LOST_TOL, we emit 'unlock' and apply UNLOCK_PENALTY once.
+          - We do NOT immediately 'reacquire' in the same step as 'unlock' to keep events unambiguous.
+        """
         event = "none"
+        just_unlocked = False
+
         if self.tracking_target_id is None:
             if detected_targets:
                 self.tracking_target_id = nearest_target if nearest_target != -1 else next(iter(detected_targets))
@@ -268,9 +283,11 @@ class UAVAgent:
                 event = "lost"
                 if self.lost_streak >= LOST_TOL:
                     self.tracking_target_id = None
+                    just_unlocked = True
                     event = "unlock"
 
-        if self.tracking_target_id is None and detected_targets:
+        # If currently unlocked (and not just unlocked this step), allow reacquire
+        if (not just_unlocked) and (self.tracking_target_id is None) and detected_targets:
             self.tracking_target_id = nearest_target if nearest_target != -1 else next(iter(detected_targets))
             self.detect_streak = 1
             self.lost_streak = 0
@@ -320,6 +337,7 @@ class UAVAgent:
                 neighbors.append(other)
 
         num_neighbors = len(neighbors)
+        has_neighbor = 1.0 if num_neighbors > 0 else 0.0
         n_dx, n_dy = 0.0, 0.0
 
         if num_neighbors > 0:
@@ -353,6 +371,8 @@ class UAVAgent:
         all_known = scan_obstacles(self.pos)
         for n_uav in neighbors:
             all_known.extend(scan_obstacles(n_uav.pos))
+
+        has_obstacle = 1.0 if len(all_known) > 0 else 0.0
 
         o_dx, o_dy = 0.0, 0.0
 
@@ -413,8 +433,35 @@ class UAVAgent:
         # 归一化：为了让数值匹配神经网络输入范围，稍微缩放一下
         uncertainty_sectors = np.clip(uncertainty_sectors * 5.0, 0, 5.0)
 
-        # 拼接
-        final_obs = np.concatenate((obs, global_belief, uncertainty_sectors))
+        # --- 4. Tracking-related features (to avoid POMDP) ---
+        lock_flag = 1.0 if self.tracking_target_id is not None else 0.0
+
+        # Use (idx+1)/num_targets so target 0 is not ambiguous with "no lock"
+        lock_tid_norm = -1.0
+        if self.tracking_target_id is not None and target_predictors:
+            lock_tid_norm = (self.tracking_target_id + 1) / max(1, len(target_predictors))  # (0,1]
+
+        detect_streak_norm = min(self.detect_streak / 10.0, 1.0)
+        lost_streak_norm = min(self.lost_streak / float(LOST_TOL), 1.0)
+
+        dist_lock_norm = 1.0
+        if (self.tracking_target_id is not None) and target_predictors and (0 <= self.tracking_target_id < len(target_predictors)):
+            est = target_predictors[self.tracking_target_id].state_si[0:2]
+            dist_lock = float(np.linalg.norm(self.pos - est))
+            dist_lock_norm = min(dist_lock / self.detect_radius, 1.0)
+
+        event_code_map = {"none": 0, "acquire": 1, "reacquire": 2, "keep": 3, "lost": 4, "unlock": 5}
+        last_event_norm = event_code_map.get(self.last_tracking_event, 0) / 5.0
+
+        tracking_feat = np.array(
+            [lock_flag, lock_tid_norm, detect_streak_norm, lost_streak_norm, dist_lock_norm, last_event_norm],
+            dtype=float
+        )
+
+        # Concatenate: base obs (9) + flags (2) + global belief (2) + uncertainty (4) + tracking (6) = 23
+        final_obs = np.concatenate(
+            (obs, np.array([has_neighbor, has_obstacle]), global_belief, uncertainty_sectors, tracking_feat)
+        )
 
         return final_obs
 
@@ -479,7 +526,8 @@ class UAVAgent:
         return bid
 
     def calculate_reward(self, prev_entropy, curr_entropy, detected_any, detected_targets, nearest_target,
-                         same_target_lock_count, action, map_size, obstacles_map, all_uavs, predictors):
+                         same_target_lock_count, action, map_size, obstacles_map, all_uavs, predictors,
+                         return_components=False):
         """
         最小化熵 + 探测保持 + 安全约束
         """
@@ -487,7 +535,10 @@ class UAVAgent:
         # 放大系数 10.0 是经验值（调节RL收敛速度），不影响物理参数
         r_info = (prev_entropy - curr_entropy) * 10.0
 
-        r_uncertainty = 0.02 * curr_entropy
+        # 2. Exploration reward (uncertainty) - only when NOT in-range and NOT locked
+        r_uncertainty = 0.0
+        if (not detected_any) and (self.tracking_target_id is None):
+            r_uncertainty = R_UNCERT_SCALE * curr_entropy
         if self.tracking_target_id is not None:
             r_uncertainty *= UNCERT_TRACK_SCALE
 
@@ -498,11 +549,11 @@ class UAVAgent:
             r_track += REACQUIRE_REWARD
         elif self.last_tracking_event == "keep":
             r_track += KEEP_REWARD
-        elif self.last_tracking_event == "lost":
-            r_track -= LOST_PENALTY
+        elif self.last_tracking_event == "unlock":
+            r_track -= UNLOCK_PENALTY
 
-        if same_target_lock_count >= 2:
-            r_track -= 0.5 * (same_target_lock_count - 1)
+        if same_target_lock_count >= 2 and SAME_TARGET_PENALTY_W > 0.0:
+            r_track -= SAME_TARGET_PENALTY_W * (same_target_lock_count - 1)
 
         if self.tracking_target_id is not None and predictors:
             if 0 <= self.tracking_target_id < len(predictors):
@@ -516,7 +567,7 @@ class UAVAgent:
                 else:
                     delta_dist = self.prev_tracking_distance - dist
                     if same_target_lock_count == 1:
-                        r_track += 0.1 * delta_dist
+                        r_track += DIST_PROGRESS_W * delta_dist
                     self.prev_tracking_distance = dist
                     self.prev_tracking_target_id = self.tracking_target_id
         elif self.tracking_target_id is None:
@@ -562,6 +613,16 @@ class UAVAgent:
         self.prev_distance_to_bounds = self.distance_to_bounds
 
         total_reward = r_info + r_uncertainty + r_track + r_action + r_collision + r_out
+        if return_components:
+            return total_reward, {
+                "r_info": float(r_info),
+                "r_uncertainty": float(r_uncertainty),
+                "r_track": float(r_track),
+                "r_action": float(r_action),
+                "r_collision": float(r_collision),
+                "r_out": float(r_out),
+                "total_raw": float(total_reward),
+            }
         return total_reward
 
 
@@ -601,10 +662,12 @@ class RewardScaler:
         self.epsilon = epsilon
         self.running_ms = RunningMeanStd(shape=shape)
 
+    def update(self, x):
+        """Update running variance with a batch of rewards (recommended)."""
+        self.running_ms.update(x)
+
     def __call__(self, x):
         # x: 单个奖励值或奖励数组
-        # 更新统计量
-        self.running_ms.update(x)
         # 归一化：这里只除以标准差 (Scaling)，不减均值 (Centering)
         # 这样可以保留奖励的正负符号（例如撞墙仍然是负的），只缩放幅度
         x_norm = x / np.sqrt(self.running_ms.var + self.epsilon)

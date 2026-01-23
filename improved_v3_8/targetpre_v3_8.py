@@ -43,7 +43,7 @@ class RealTarget:
     真实目标模型：'匀速转弯 (CT) 模型'
     """
     def __init__(self, ID, priority, start_belief_pos, initial_v, initial_phi,
-                 v_range=None, phi_range=None, map_size=None):
+                 v_range=None, phi_range=None, map_size=None, random_turn_prob=0.0):
         self.ID = ID
         self.priority = priority
 
@@ -70,6 +70,7 @@ class RealTarget:
         self.turn_rate = np.radians(5.0)  # 转弯速率：5度/秒
         self.phi_range = phi_range
         self.map_size = map_size
+        self.random_turn_prob = float(random_turn_prob)
 
     def step_forward(self):
         """真实目标步进"""
@@ -88,7 +89,7 @@ class RealTarget:
             self.state[5] = self.turn_rate  # 强制改为正转速（向左转回去）
 
         # 情况 C: 在中间区域，偶尔随机改变一下转弯方向（模拟机动性）
-        elif np.random.rand() < 0.1:  # 10% 的概率随机改变转弯方向
+        elif np.random.rand() < self.random_turn_prob:
             self.state[5] = np.random.choice([-self.turn_rate, self.turn_rate])
 
         if abs(self.state[5]) > 1e-5:
