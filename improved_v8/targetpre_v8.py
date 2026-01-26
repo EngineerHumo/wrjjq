@@ -65,19 +65,24 @@ class RealTarget:
     def step_forward(self):
         """真实目标步进"""
         # 情况 A/B: 碰到边界时，防止进入非法区间
+        forced_turn = False
         if not self.phi_range_wrap:
             if self.state[4] >= self.phi_range[1] and self.state[5] > 0:
                 self.state[5] = -self.turn_rate  # 强制改为负转速（向右转回去）
+                forced_turn = True
             elif self.state[4] <= self.phi_range[0] and self.state[5] < 0:
                 self.state[5] = self.turn_rate  # 强制改为正转速（向左转回去）
+                forced_turn = True
         else:
             if self.state[4] >= self.phi_range[0] and self.state[5] < 0:
                 self.state[5] = self.turn_rate  # 防止从上边界向下进入禁区
+                forced_turn = True
             elif self.state[4] <= self.phi_range[1] and self.state[5] > 0:
                 self.state[5] = -self.turn_rate  # 防止从下边界向上进入禁区
+                forced_turn = True
 
         # 情况 C: 在中间区域，偶尔随机改变一下转弯方向（模拟机动性）
-        elif np.random.rand() < 0.1:  # 10% 的概率随机改变转弯方向
+        if not forced_turn and np.random.rand() < 0.1:  # 10% 的概率随机改变转弯方向
             self.state[5] = np.random.choice([-self.turn_rate, self.turn_rate])
 
         if abs(self.state[5]) > 1e-5:
