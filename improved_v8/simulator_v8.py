@@ -331,7 +331,7 @@ def train_with_improvements():
 
     reward_history = []
     noise_history = []
-    MAX_EPISODES = 15000
+    MAX_EPISODES = 20000
     MAX_STEPS = 100
     BATCH_SIZE = 512
     noise_std = 0.3
