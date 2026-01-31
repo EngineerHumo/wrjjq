@@ -235,6 +235,8 @@ class UAVAgent:
         nearest_predictor = None
         min_dist = float("inf")
         for predictor in target_predictors:
+            if getattr(predictor, "collapse_active", False):
+                continue
             estimate = predictor.estimate()[0:2]
             dist = np.linalg.norm(estimate - agent_pos)
             if dist < min_dist:
