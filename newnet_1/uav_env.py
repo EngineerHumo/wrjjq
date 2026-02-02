@@ -97,6 +97,9 @@ class UAVSwarmEnv(gym.Env):
         self.agents = []
         self.targets = []
         self.obstacles = []  # 简单圆形障碍物 [(x, y, r), ...]
+        self.uav_trajectories = []
+        self.target_trajectories = []
+        self.detection_points = []
 
         # 全局状态 (Global State) 容器
         self.global_map_prob = np.zeros((Config.GRID_ROWS, Config.GRID_COLS))  # 目标存在概率图
@@ -134,6 +137,11 @@ class UAVSwarmEnv(gym.Env):
         # 重置地图
         self.global_map_prob.fill(0.0)
         self.global_map_cover.fill(0.0)
+
+        # 初始化轨迹与检测点
+        self.uav_trajectories = [[(agent['x'], agent['y'])] for agent in self.agents]
+        self.target_trajectories = [[(target.x, target.y)] for target in self.targets]
+        self.detection_points = []
 
         return self._get_all_obs(), {}
 
@@ -176,10 +184,19 @@ class UAVSwarmEnv(gym.Env):
             # 边界约束 [cite: 323]
             agent['x'] = np.clip(agent['x'], 0, Config.MAP_SIZE)
             agent['y'] = np.clip(agent['y'], 0, Config.MAP_SIZE)
+            self.uav_trajectories[i].append((agent['x'], agent['y']))
 
         # 更新目标
-        for target in self.targets:
+        for idx, target in enumerate(self.targets):
             target.step()
+            self.target_trajectories[idx].append((target.x, target.y))
+
+        # 记录检测点 (无人机进入探测范围视为检测)
+        for target in self.targets:
+            for agent in self.agents:
+                dist = np.sqrt((agent['x'] - target.x) ** 2 + (agent['y'] - target.y) ** 2)
+                if dist <= Config.SENSOR_RANGE:
+                    self.detection_points.append((agent['x'], agent['y']))
 
         # 更新概率图 (模拟粒子滤波效果: 目标附近概率高)
         # 注意：这里简化处理，实际应接入 3.2 节的粒子滤波算法
