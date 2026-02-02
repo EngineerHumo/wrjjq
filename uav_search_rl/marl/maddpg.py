@@ -97,9 +97,10 @@ class MADDPG:
 
             actor = self.actors[i]
             actor_opt = self.actor_opts[i]
-            cur_actions = actions.clone()
-            cur_actions[:, i] = actor(obs[:, i]) * self.action_scale
-            cur_actions_cat = cur_actions.view(cur_actions.shape[0], -1)
+            left_actions = actions[:, :i].detach()
+            right_actions = actions[:, i + 1 :].detach()
+            actor_action = actor(obs[:, i]) * self.action_scale
+            cur_actions_cat = torch.cat([left_actions, actor_action, right_actions], dim=1).view(actions.shape[0], -1)
             actor_loss = -critic(torch.cat([states, cur_actions_cat], dim=-1)).mean()
             actor_opt.zero_grad()
             actor_loss.backward()
