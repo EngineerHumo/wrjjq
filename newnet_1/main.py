@@ -1,4 +1,6 @@
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 import os
@@ -22,6 +24,65 @@ RESULT_DIR = "./results"  # 结果保存路径
 # 确保目录存在
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
+
+
+def plot_trajectories(output_dir, map_size, obstacles, uav_trajectories, target_trajectories, detection_points, episode):
+    os.makedirs(output_dir, exist_ok=True)
+    plt.figure(figsize=(8, 8))
+    boundary = plt.Rectangle(
+        (0, 0),
+        map_size,
+        map_size,
+        fill=False,
+        edgecolor="black",
+        linestyle="--",
+        linewidth=1.5,
+        label="Map Boundary"
+    )
+    ax = plt.gca()
+    ax.add_patch(boundary)
+
+    if obstacles:
+        for idx, (ox, oy, radius) in enumerate(obstacles):
+            circle = plt.Circle((ox, oy), radius, color="black", fill=False, linewidth=1.2,
+                                label="Obstacle" if idx == 0 else None)
+            ax.add_patch(circle)
+
+    colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
+    for idx, traj in enumerate(uav_trajectories):
+        traj = np.array(traj)
+        if traj.size == 0:
+            continue
+        color = colors[idx % len(colors)]
+        plt.plot(traj[:, 0], traj[:, 1], color=color, label=f"UAV {idx + 1}")
+
+    for idx, traj in enumerate(target_trajectories):
+        traj = np.array(traj)
+        if traj.size == 0:
+            continue
+        plt.plot(
+            traj[:, 0],
+            traj[:, 1],
+            linestyle="--",
+            linewidth=2.0,
+            marker="o",
+            markersize=2.5,
+            label=f"Target {idx + 1}"
+        )
+
+    if detection_points:
+        det_points = np.array(detection_points)
+        plt.scatter(det_points[:, 0], det_points[:, 1], s=20, c="red", label="Detection")
+
+    margin = 50.0
+    plt.xlim(-margin, map_size + margin)
+    plt.ylim(-margin, map_size + margin)
+    plt.title(f"UAV Trajectories & Detections (Ep {episode})")
+    plt.legend(loc="upper right")
+    plt.gca().set_aspect("equal", adjustable="box")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"trajectory_ep{episode}.png"))
+    plt.close()
 
 
 # ===========================
@@ -141,6 +202,18 @@ if __name__ == "__main__":
               f"Reward: {episode_reward:.2f} | "
               f"Cov: {current_coverage:.2%} | "
               f"Noise: {noise_std:.3f}")
+
+        if i_episode % 100 == 0:
+            trajectory_dir = os.path.join(RESULT_DIR, "trajectories")
+            plot_trajectories(
+                trajectory_dir,
+                Config.MAP_SIZE,
+                env.obstacles,
+                env.uav_trajectories,
+                env.target_trajectories,
+                env.detection_points,
+                i_episode
+            )
 
         # ===========================
         # 评估与保存
