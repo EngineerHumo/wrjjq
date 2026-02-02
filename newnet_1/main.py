@@ -85,6 +85,23 @@ def plot_trajectories(output_dir, map_size, obstacles, uav_trajectories, target_
     plt.close()
 
 
+def plot_reward_curve(output_dir, reward_history, window_sizes, episode):
+    os.makedirs(output_dir, exist_ok=True)
+    plt.figure(figsize=(8, 4))
+    plt.plot(reward_history, label="Avg Reward")
+    for window_size in window_sizes:
+        if len(reward_history) >= window_size:
+            ma_values = np.convolve(reward_history, np.ones(window_size) / window_size, mode="valid")
+            plt.plot(range(window_size - 1, window_size - 1 + len(ma_values)), ma_values, label=f"MA{window_size}")
+    plt.title(f"Reward Curve (Ep {episode})")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "training_curve.png"))
+    plt.close()
+
+
 # ===========================
 # 2. 评估函数 (无噪声测试)
 # ===========================
@@ -205,6 +222,7 @@ if __name__ == "__main__":
 
         if i_episode % 100 == 0:
             trajectory_dir = os.path.join(RESULT_DIR, "trajectories")
+            print(f"[Trajectory] Saving trajectory image to {trajectory_dir} (ep {i_episode})")
             plot_trajectories(
                 trajectory_dir,
                 Config.MAP_SIZE,
@@ -214,6 +232,8 @@ if __name__ == "__main__":
                 env.detection_points,
                 i_episode
             )
+            print(f"[Reward] Saving reward curve to {RESULT_DIR} (ep {i_episode})")
+            plot_reward_curve(RESULT_DIR, scores, [50, 100], i_episode)
 
         # ===========================
         # 评估与保存
