@@ -222,6 +222,7 @@ if __name__ == "__main__":
 
         if i_episode % 100 == 0:
             trajectory_dir = os.path.join(RESULT_DIR, "trajectories")
+            print(f"[Trajectory] Saving trajectory image to {trajectory_dir} (ep {i_episode})")
             plot_trajectories(
                 trajectory_dir,
                 Config.MAP_SIZE,
@@ -231,6 +232,7 @@ if __name__ == "__main__":
                 env.detection_points,
                 i_episode
             )
+            print(f"[Reward] Saving reward curve to {RESULT_DIR} (ep {i_episode})")
             plot_reward_curve(RESULT_DIR, scores, [50, 100], i_episode)
 
         # ===========================
