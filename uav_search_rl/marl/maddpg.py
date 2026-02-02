@@ -15,6 +15,7 @@ class MADDPGConfig:
     obs_dim: int
     state_dim: int
     action_dim: int
+    action_scale: np.ndarray
     hidden_dim: int
     actor_lr: float
     critic_lr: float
@@ -28,6 +29,7 @@ class MADDPG:
     def __init__(self, config: MADDPGConfig) -> None:
         self.cfg = config
         self.device = torch.device(config.device)
+        self.action_scale = torch.as_tensor(config.action_scale, dtype=torch.float32, device=self.device)
         self.actors = nn.ModuleList([
             Actor(config.obs_dim, config.action_dim, config.hidden_dim).to(self.device)
             for _ in range(config.num_agents)
@@ -74,7 +76,8 @@ class MADDPG:
         metrics = {}
         next_actions = []
         for idx, target_actor in enumerate(self.target_actors):
-            next_actions.append(target_actor(next_obs[:, idx]))
+            scaled = target_actor(next_obs[:, idx]) * self.action_scale
+            next_actions.append(scaled)
         next_actions_cat = torch.cat(next_actions, dim=-1)
         actions_cat = actions.view(actions.shape[0], -1)
 
@@ -94,9 +97,10 @@ class MADDPG:
 
             actor = self.actors[i]
             actor_opt = self.actor_opts[i]
-            cur_actions = actions.clone()
-            cur_actions[:, i] = actor(obs[:, i])
-            cur_actions_cat = cur_actions.view(cur_actions.shape[0], -1)
+            left_actions = actions[:, :i].detach()
+            right_actions = actions[:, i + 1 :].detach()
+            actor_action = actor(obs[:, i]) * self.action_scale
+            cur_actions_cat = torch.cat([left_actions, actor_action, right_actions], dim=1).view(actions.shape[0], -1)
             actor_loss = -critic(torch.cat([states, cur_actions_cat], dim=-1)).mean()
             actor_opt.zero_grad()
             actor_loss.backward()

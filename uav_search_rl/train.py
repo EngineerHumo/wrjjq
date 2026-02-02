@@ -122,6 +122,7 @@ def main() -> None:
         obs_dim=obs_dim,
         state_dim=state_dim,
         action_dim=action_dim,
+        action_scale=np.array([cfg["env"]["max_accel"], cfg["env"]["max_yaw_rate"]], dtype=np.float32),
         hidden_dim=cfg["train"]["hidden_dim"],
         actor_lr=cfg["train"]["actor_lr"],
         critic_lr=cfg["train"]["critic_lr"],
