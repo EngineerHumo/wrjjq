@@ -33,14 +33,19 @@ class Config:
     DT = 1.0  # 仿真步长 (s) [cite: 121]
 
     # 奖励权重 [cite: 351]
-    W_COV = 2.0 / (GRID_ROWS * GRID_COLS)  # 覆盖奖励权重 (归一化)
+    W_COV = 0.2 / (GRID_ROWS * GRID_COLS)  # 覆盖奖励权重 (归一化)
     W_EXP = 1.5  # 探索奖励权重
     W_COL = -0.5  # 重叠/协同惩罚权重 (论文中虽然叫奖励，通常处理为负项或调整逻辑)
     W_SMOOTH = -0.1  # 平滑飞行权重
     W_OBS = -10.0  # 障碍物惩罚
     W_CRASH = -10.0  # 碰撞惩罚
     W_SHARE = 0.5  # 信息共享奖励
-    W_DET = 5.0  # 目标检测奖励 (Target Detection Reward)
+    W_DETECT = 5.0  # 目标检测奖励 (Target Detection Reward)
+
+    # 粒子滤波参数
+    N_PARTICLES = 2000
+    PF_MOTION_STD = 8.0
+    PF_MEAS_STD = 30.0
 
 
 # ===========================
@@ -80,7 +85,69 @@ class Target:
 
 
 # ===========================
-# 3. 核心环境类 (Gymnasium Interface)
+# 3. 粒子滤波器 (Particle Filter)
+# ===========================
+class ParticleFilter:
+    def __init__(self, n_particles):
+        self.n_particles = n_particles
+        self.particles = np.zeros((n_particles, 2), dtype=np.float32)
+        self.weights = np.ones(n_particles, dtype=np.float32) / n_particles
+        self._init_particles()
+
+    def _init_particles(self):
+        self.particles[:, 0] = np.random.uniform(0, Config.MAP_SIZE, self.n_particles)
+        self.particles[:, 1] = np.random.uniform(0, Config.MAP_SIZE, self.n_particles)
+        self.weights.fill(1.0 / self.n_particles)
+
+    def predict(self):
+        noise = np.random.normal(0.0, Config.PF_MOTION_STD, size=self.particles.shape)
+        self.particles += noise
+        self.particles[:, 0] = np.clip(self.particles[:, 0], 0, Config.MAP_SIZE)
+        self.particles[:, 1] = np.clip(self.particles[:, 1], 0, Config.MAP_SIZE)
+
+    def update(self, _uav_states, detections):
+        eps = 1e-6
+        for (uav_pos, detected, meas_pos) in detections:
+            if detected:
+                diff = self.particles - np.array(meas_pos, dtype=np.float32)
+                dist_sq = np.sum(diff ** 2, axis=1)
+                likelihood = np.exp(-0.5 * dist_sq / (Config.PF_MEAS_STD ** 2)) + eps
+                self.weights *= likelihood
+            else:
+                diff = self.particles - np.array(uav_pos, dtype=np.float32)
+                dist_sq = np.sum(diff ** 2, axis=1)
+                in_range = dist_sq <= Config.SENSOR_RANGE ** 2
+                self.weights[in_range] *= 0.1
+
+        weight_sum = np.sum(self.weights)
+        if weight_sum <= 0:
+            self.weights.fill(1.0 / self.n_particles)
+        else:
+            self.weights /= weight_sum
+
+    def resample(self):
+        cumulative = np.cumsum(self.weights)
+        step = 1.0 / self.n_particles
+        start = np.random.uniform(0, step)
+        points = start + step * np.arange(self.n_particles)
+        indexes = np.searchsorted(cumulative, points)
+        self.particles = self.particles[indexes]
+        self.weights.fill(1.0 / self.n_particles)
+
+    def estimate_map(self):
+        hist, _, _ = np.histogram2d(
+            self.particles[:, 0],
+            self.particles[:, 1],
+            bins=[Config.GRID_ROWS, Config.GRID_COLS],
+            range=[[0, Config.MAP_SIZE], [0, Config.MAP_SIZE]]
+        )
+        if hist.max() > 0:
+            hist = hist / hist.max()
+        return hist
+
+
+# ===========================
+# 4. 核心环境类 (Gymnasium Interface)
 # ===========================
 class UAVSwarmEnv(gym.Env):
     def __init__(self, n_uav=None, n_target=None):
@@ -119,6 +186,8 @@ class UAVSwarmEnv(gym.Env):
 
         # 初始化障碍物 (固定或随机)
         self._init_obstacles()
+        self.particle_filter = None
+        self.last_detection = False
 
     def _init_obstacles(self):
         # 随机生成几个圆形障碍物 [cite: 358]
@@ -130,6 +199,9 @@ class UAVSwarmEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+
+        self.obstacles = []
+        self._init_obstacles()
 
         # 初始化无人机状态: x, y, v, phi
         self.agents = []
@@ -145,15 +217,17 @@ class UAVSwarmEnv(gym.Env):
 
         # 初始化目标
         self.targets = [Target() for _ in range(self.n_targets)]
+        self.particle_filter = ParticleFilter(Config.N_PARTICLES)
 
         # 重置地图
-        self.global_map_prob.fill(0.0)
+        self.global_map_prob = self.particle_filter.estimate_map()
         self.global_map_cover.fill(0.0)
 
         # 初始化轨迹与检测点
         self.uav_trajectories = [[(agent['x'], agent['y'])] for agent in self.agents]
         self.target_trajectories = [[(target.x, target.y)] for target in self.targets]
         self.detection_points = []
+        self.last_detection = False
 
         return self._get_all_obs(), {}
 
@@ -203,17 +277,20 @@ class UAVSwarmEnv(gym.Env):
             target.step()
             self.target_trajectories[idx].append((target.x, target.y))
 
-        # 更新概率图 (模拟粒子滤波效果: 目标附近概率高)
-        # 注意：这里简化处理，实际应接入 3.2 节的粒子滤波算法
-        self.global_map_prob *= 0.95  # 衰减
-        for target in self.targets:
-            tm, tn = self._pos_to_grid(target.x, target.y)
-            # 简单的概率扩散
-            for di in range(-2, 3):
-                for dj in range(-2, 3):
-                    ni, nj = tm + di, tn + dj
-                    if 0 <= ni < Config.GRID_ROWS and 0 <= nj < Config.GRID_COLS:
-                        self.global_map_prob[ni, nj] += 0.1
+        # 粒子滤波更新 (去除“上帝视角”作弊)
+        detections = []
+        target = self.targets[0]
+        for agent in self.agents:
+            dist = np.sqrt((agent['x'] - target.x) ** 2 + (agent['y'] - target.y) ** 2)
+            detected = dist <= Config.SENSOR_RANGE
+            meas_pos = (target.x, target.y) if detected else None
+            detections.append(((agent['x'], agent['y']), detected, meas_pos))
+
+        self.particle_filter.predict()
+        self.particle_filter.update(self.agents, detections)
+        self.particle_filter.resample()
+        self.global_map_prob = self.particle_filter.estimate_map()
+        self.last_detection = any(det[1] for det in detections)
 
         # --- 2. 奖励计算 (Reward Calculation) [cite: 351] ---
         newly_covered_count = 0
@@ -256,7 +333,7 @@ class UAVSwarmEnv(gym.Env):
             for target in self.targets:
                 dist = np.sqrt((agent['x'] - target.x) ** 2 + (agent['y'] - target.y) ** 2)
                 if dist <= Config.SENSOR_RANGE:
-                    r_step += Config.W_DET
+                    r_step += Config.W_DETECT
                     self.detection_points.append((agent['x'], agent['y']))
 
             # (2) 平滑飞行奖励 [cite: 343]
@@ -280,7 +357,12 @@ class UAVSwarmEnv(gym.Env):
             # (1) 重叠惩罚
             # 如果两个无人机覆盖了同一个网格，给予负奖励
             # 简化计算：只看中心点距离是否过近导致视野重叠严重
-            pass  # 复杂计算略，这里主要依赖避碰惩罚
+            for j in range(i + 1, self.n_agents):
+                dist = np.sqrt((self.agents[i]['x'] - self.agents[j]['x']) ** 2 +
+                               (self.agents[i]['y'] - self.agents[j]['y']) ** 2)
+                if dist < 1.5 * Config.SENSOR_RANGE:
+                    rewards[i] += Config.W_COL
+                    rewards[j] += Config.W_COL
 
             # (2) 无人机间避碰 [cite: 349]
             for j in range(i + 1, self.n_agents):
@@ -302,6 +384,7 @@ class UAVSwarmEnv(gym.Env):
         terminated = [False] * self.n_agents
         truncated = [False] * self.n_agents
 
+        infos["detections"] = self.last_detection
         return obs_n, rewards, terminated, truncated, infos
 
     def _get_all_obs(self):
