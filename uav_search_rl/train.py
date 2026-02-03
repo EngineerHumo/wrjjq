@@ -16,6 +16,7 @@ from uav_search_rl.marl.noise import GaussianNoise, OUNoise
 from uav_search_rl.marl.replay_buffer import ReplayBuffer
 from uav_search_rl.utils.checkpoint import load_checkpoint, save_checkpoint
 from uav_search_rl.utils.logger import MetricLogger
+from uav_search_rl.utils.plotting import plot_reward_curve, plot_trajectories
 from uav_search_rl.utils.seed import set_seed
 
 
@@ -150,6 +151,11 @@ def main() -> None:
     best_score = -1e9
     checkpoints_dir = Path("checkpoints")
     writer = SummaryWriter(log_dir="runs/train")
+    plot_dir = Path("runs/plots")
+    trajectory_dir = plot_dir / "trajectories"
+    reward_history: List[float] = []
+    plot_interval = int(cfg["train"].get("plot_interval", cfg["train"]["log_interval"]))
+    reward_windows = cfg["train"].get("reward_ma_windows", [50, 100])
 
     if args.resume:
         checkpoint = load_checkpoint(args.resume, map_location=cfg["train"]["device"])
@@ -168,6 +174,8 @@ def main() -> None:
         state, obs = env.reset()
         episode_rewards = np.zeros(cfg["env"]["num_uavs"], dtype=np.float32)
         info_history: List[Dict[str, float]] = []
+        uav_trajs = [state["uav_states"][:, :2].astype(np.float32).copy()]
+        target_traj = [env.target_state[:2].astype(np.float32).copy()]
         noise.reset()
 
         for step in range(cfg["train"]["max_steps"]):
@@ -185,6 +193,8 @@ def main() -> None:
             state, obs = next_state, next_obs
             episode_rewards += rewards
             info_history.append(info)
+            uav_trajs.append(state["uav_states"][:, :2].astype(np.float32).copy())
+            target_traj.append(env.target_state[:2].astype(np.float32).copy())
             global_step += 1
 
             if len(buffer) >= cfg["train"]["batch_size"] and global_step > cfg["train"]["warmup_steps"]:
@@ -194,9 +204,23 @@ def main() -> None:
                     logger.update(key, value)
 
         avg_reward = float(np.mean(episode_rewards))
+        reward_history.append(avg_reward)
         writer.add_scalar("train/episode_reward", avg_reward, episode)
         writer.add_scalar("train/cover_rate", info_history[-1]["cover_rate"], episode)
         writer.add_scalar("train/explore_rate", info_history[-1]["explore_rate"], episode)
+
+        if plot_interval > 0 and (episode + 1) % plot_interval == 0:
+            uav_trajs_arr = [
+                np.stack([step_state[idx] for step_state in uav_trajs]) for idx in range(cfg["env"]["num_uavs"])
+            ]
+            plot_trajectories(
+                trajectory_dir,
+                env.obstacles,
+                uav_trajs_arr,
+                np.stack(target_traj),
+                episode,
+            )
+            plot_reward_curve(plot_dir, reward_history, reward_windows, episode)
 
         if (episode + 1) % cfg["train"]["log_interval"] == 0:
             print(f"Episode {episode + 1}: reward={avg_reward:.3f}")

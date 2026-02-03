@@ -94,10 +94,12 @@ class ParticleFilter:
 
     def resample(self) -> None:
         cumulative = np.cumsum(self.weights)
+        cumulative[-1] = 1.0
         step = 1.0 / self.config.num_particles
         start = self.rng.uniform(0, step)
         points = start + step * np.arange(self.config.num_particles)
         indices = np.searchsorted(cumulative, points)
+        indices = np.clip(indices, 0, self.config.num_particles - 1)
         self.particles = self.particles[indices]
         self.weights.fill(1.0 / self.config.num_particles)
 
