@@ -31,9 +31,9 @@ def step_uav(state: np.ndarray, action: np.ndarray, constraints: UAVConstraints)
     return np.array([x, y, vx, vy, heading], dtype=np.float32)
 
 
-def clamp_position(state: np.ndarray, bounds: Tuple[float, float]) -> np.ndarray:
+def clamp_position(state: np.ndarray, bounds: Tuple[float, float, float, float]) -> np.ndarray:
     x, y, vx, vy, heading = state
-    min_pos, max_pos = bounds
-    x = np.clip(x, min_pos, max_pos)
-    y = np.clip(y, min_pos, max_pos)
+    min_x, max_x, min_y, max_y = bounds
+    x = np.clip(x, min_x, max_x)
+    y = np.clip(y, min_y, max_y)
     return np.array([x, y, vx, vy, heading], dtype=np.float32)

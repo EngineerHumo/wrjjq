@@ -127,10 +127,12 @@ class ParticleFilter:
 
     def resample(self):
         cumulative = np.cumsum(self.weights)
+        cumulative[-1] = 1.0
         step = 1.0 / self.n_particles
         start = np.random.uniform(0, step)
         points = start + step * np.arange(self.n_particles)
         indexes = np.searchsorted(cumulative, points)
+        indexes = np.clip(indexes, 0, self.n_particles - 1)
         self.particles = self.particles[indexes]
         self.weights.fill(1.0 / self.n_particles)
 
@@ -186,7 +188,9 @@ class UAVSwarmEnv(gym.Env):
 
         # 初始化障碍物 (固定或随机)
         self._init_obstacles()
-        self.particle_filter = None
+        self.particle_filters = []
+        self.target_detected_by = []
+        self.agent_map_prob = []
         self.last_detection = False
 
     def _init_obstacles(self):
@@ -217,11 +221,17 @@ class UAVSwarmEnv(gym.Env):
 
         # 初始化目标
         self.targets = [Target() for _ in range(self.n_targets)]
-        self.particle_filter = ParticleFilter(Config.N_PARTICLES)
+        self.particle_filters = [ParticleFilter(Config.N_PARTICLES) for _ in range(self.n_targets)]
+        self.target_detected_by = [None for _ in range(self.n_targets)]
 
         # 重置地图
-        self.global_map_prob = self.particle_filter.estimate_map()
+        target_maps = [pf.estimate_map() for pf in self.particle_filters]
+        if target_maps:
+            self.global_map_prob = np.mean(target_maps, axis=0)
+        else:
+            self.global_map_prob.fill(0.0)
         self.global_map_cover.fill(0.0)
+        self.agent_map_prob = [self.global_map_prob.copy() for _ in range(self.n_agents)]
 
         # 初始化轨迹与检测点
         self.uav_trajectories = [[(agent['x'], agent['y'])] for agent in self.agents]
@@ -278,19 +288,47 @@ class UAVSwarmEnv(gym.Env):
             self.target_trajectories[idx].append((target.x, target.y))
 
         # 粒子滤波更新 (去除“上帝视角”作弊)
-        detections = []
-        target = self.targets[0]
-        for agent in self.agents:
-            dist = np.sqrt((agent['x'] - target.x) ** 2 + (agent['y'] - target.y) ** 2)
-            detected = dist <= Config.SENSOR_RANGE
-            meas_pos = (target.x, target.y) if detected else None
-            detections.append(((agent['x'], agent['y']), detected, meas_pos))
+        target_maps = []
+        detected_by = [None for _ in range(self.n_targets)]
+        any_detection = False
+        for target_idx, target in enumerate(self.targets):
+            detections = []
+            detected_agents = []
+            for idx, agent in enumerate(self.agents):
+                dist = np.sqrt((agent['x'] - target.x) ** 2 + (agent['y'] - target.y) ** 2)
+                detected = dist <= Config.SENSOR_RANGE
+                meas_pos = (target.x, target.y) if detected else None
+                detections.append(((agent['x'], agent['y']), detected, meas_pos))
+                if detected:
+                    detected_agents.append((idx, dist))
+                    any_detection = True
+            if detected_agents:
+                detected_agents.sort(key=lambda item: item[1])
+                detected_by[target_idx] = detected_agents[0][0]
 
-        self.particle_filter.predict()
-        self.particle_filter.update(self.agents, detections)
-        self.particle_filter.resample()
-        self.global_map_prob = self.particle_filter.estimate_map()
-        self.last_detection = any(det[1] for det in detections)
+            pf = self.particle_filters[target_idx]
+            pf.predict()
+            pf.update(self.agents, detections)
+            pf.resample()
+            target_maps.append(pf.estimate_map())
+
+        self.target_detected_by = detected_by
+        if target_maps:
+            self.global_map_prob = np.mean(target_maps, axis=0)
+        else:
+            self.global_map_prob.fill(0.0)
+        self.agent_map_prob = []
+        for i in range(self.n_agents):
+            eligible_maps = []
+            for t_idx, target_map in enumerate(target_maps):
+                assigned_agent = detected_by[t_idx]
+                if assigned_agent is None or assigned_agent == i:
+                    eligible_maps.append(target_map)
+            if eligible_maps:
+                self.agent_map_prob.append(np.mean(eligible_maps, axis=0))
+            else:
+                self.agent_map_prob.append(np.zeros_like(self.global_map_prob))
+        self.last_detection = any_detection
 
         # --- 2. 奖励计算 (Reward Calculation) [cite: 351] ---
         newly_covered_count = 0
@@ -323,7 +361,7 @@ class UAVSwarmEnv(gym.Env):
                                 newly_covered_count += 1
 
                                 # 探索奖励: 如果该区域概率高，奖励更多 [cite: 330]
-                                if self.global_map_prob[gm, gn] > 0.5:
+                                if self.agent_map_prob[i][gm, gn] > 0.5:
                                     r_step += Config.W_EXP
 
             agent_grid_coverage.append(set(covered_indices))
@@ -407,9 +445,10 @@ class UAVSwarmEnv(gym.Env):
             # 提取局部网格
             m, n = self._pos_to_grid(agent['x'], agent['y'])
             # 简化：直接取当前网格的概率
+            agent_map = self.agent_map_prob[i] if self.agent_map_prob else self.global_map_prob
             local_prob = [
-                self.global_map_prob[m, n],
-                np.mean(self.global_map_prob),  # 简化的全局/局部感知
+                agent_map[m, n],
+                float(np.mean(agent_map)),  # 简化的全局/局部感知
                 0.0  # 梯度暂略
             ]
 
