@@ -10,7 +10,7 @@ from collections import deque
 # 导入前两部分模块
 # 假设你已经保存为 uav_env.py 和 algo.py
 from uav_env import UAVSwarmEnv, Config
-from algo import MADDPG, AlgoConfig
+from algo import MADDPG
 
 # ===========================
 # 1. 训练超参数设置
@@ -108,21 +108,25 @@ def plot_reward_curve(output_dir, reward_history, window_sizes, episode):
 def evaluate(env, maddpg, n_episodes=5):
     """
     在无噪声模式下运行几个回合，评估当前策略性能
-    返回: 平均奖励, 平均覆盖率
+    返回: 平均奖励, 平均覆盖率, 平均检测率
     """
     avg_reward = 0.0
     avg_coverage = 0.0
+    avg_detection_rate = 0.0
 
     for _ in range(n_episodes):
         obs_n, _ = env.reset()
         episode_reward = 0
+        detection_steps = 0
 
         for step in range(MAX_STEPS):
             # 获取动作 (noise_std=0 表示纯利用，不探索)
             actions = maddpg.select_actions(obs_n, noise_std=0.0)
 
             # 环境步进
-            next_obs_n, rewards_n, terminated, truncated, _ = env.step(actions)
+            next_obs_n, rewards_n, terminated, truncated, infos = env.step(actions)
+            if infos.get("detections"):
+                detection_steps += 1
 
             # 累加奖励 (取团队平均或总和)
             episode_reward += np.sum(rewards_n)
@@ -131,11 +135,13 @@ def evaluate(env, maddpg, n_episodes=5):
         # 计算本回合最终覆盖率
         # 覆盖率 = 覆盖网格数 / 总网格数
         coverage_rate = np.sum(env.global_map_cover) / (Config.GRID_ROWS * Config.GRID_COLS)
+        detection_rate = detection_steps / MAX_STEPS
 
         avg_reward += episode_reward
         avg_coverage += coverage_rate
+        avg_detection_rate += detection_rate
 
-    return avg_reward / n_episodes, avg_coverage / n_episodes
+    return avg_reward / n_episodes, avg_coverage / n_episodes, avg_detection_rate / n_episodes
 
 
 # ===========================
@@ -160,7 +166,7 @@ if __name__ == "__main__":
     # 记录指标
     scores = []
     coverages = []
-    best_coverage = 0.0
+    best_score = -np.inf
 
     print(f"Start Training: UAVs={env.n_agents}, Map={Config.MAP_SIZE}x{Config.MAP_SIZE}...")
 
@@ -171,7 +177,11 @@ if __name__ == "__main__":
         episode_reward = 0
 
         # 噪声衰减 (Curriculum Learning 思想: 初期探索，后期利用)
-        noise_std = max(0.05, AlgoConfig.NOISE_STD * (1 - i_episode / MAX_EPISODES))
+        noise_decay_episodes = max(1, int(0.8 * MAX_EPISODES))
+        progress = min(i_episode, noise_decay_episodes) / noise_decay_episodes
+        noise_start = 0.5
+        noise_end = 0.05
+        noise_std = noise_start * ((noise_end / noise_start) ** progress)
 
         for t in range(MAX_STEPS):
             # 1. 选择动作 (带噪声)
@@ -239,17 +249,19 @@ if __name__ == "__main__":
         # 评估与保存
         # ===========================
         if i_episode % EVAL_INTERVAL == 0:
-            eval_reward, eval_cov = evaluate(env, maddpg)
+            eval_reward, eval_cov, eval_det = evaluate(env, maddpg)
             print(f"\n--- Evaluation @ Ep {i_episode} ---")
             print(f"Avg Reward: {eval_reward:.2f}")
             print(f"Avg Coverage: {eval_cov:.2%}")
+            print(f"Avg Detection: {eval_det:.2%}")
             print(f"----------------------------\n")
 
-            # 保存最佳模型 (以覆盖率为主要指标，符合论文目标)
-            if eval_cov > best_coverage:
-                best_coverage = eval_cov
+            # 保存最佳模型 (覆盖率 + 检测率加权)
+            eval_score = 0.7 * eval_cov + 0.3 * eval_det
+            if eval_score > best_score:
+                best_score = eval_score
                 maddpg.save_models(SAVE_DIR)
-                print(f"*** New Best Model Saved (Cov: {best_coverage:.2%}) ***")
+                print(f"*** New Best Model Saved (Score: {best_score:.3f}) ***")
 
     # ===========================
     # 4. 结果可视化
