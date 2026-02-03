@@ -140,7 +140,7 @@ class UAVSearchEnv:
             max_yaw_rate=self.cfg.max_yaw_rate,
             dt=self.cfg.dt,
         )
-        bounds = (0.0, float(max(self.cfg.grid_m - 1, self.cfg.grid_n - 1)))
+        bounds = (0.0, float(self.cfg.grid_m - 1), 0.0, float(self.cfg.grid_n - 1))
         rewards = np.zeros(self.cfg.num_uavs, dtype=np.float32)
         info: Dict[str, float] = {}
         obstacle_penalty = 0.0
@@ -152,7 +152,9 @@ class UAVSearchEnv:
             self.uav_states[idx] = step_uav(self.uav_states[idx], actions[idx], constraints)
             self.uav_states[idx] = clamp_position(self.uav_states[idx], bounds)
             pos = self.uav_states[idx][:2]
-            cell = np.clip(pos.round().astype(int), 0, self.cfg.grid_m - 1)
+            cell_x = np.clip(int(round(pos[0])), 0, self.cfg.grid_m - 1)
+            cell_y = np.clip(int(round(pos[1])), 0, self.cfg.grid_n - 1)
+            cell = np.array([cell_x, cell_y])
             if self.obstacles[cell[0], cell[1]] == -1:
                 obstacle_penalty += 1.0
             warning_penalty += self._warning_penalty(pos)
@@ -179,7 +181,8 @@ class UAVSearchEnv:
         )
         target_noise = self.rng.normal(0.0, 0.1, size=(2,))
         self.target_state = ct_step(self.target_state, target_noise, ct_constraints)
-        self.target_state[:2] = np.clip(self.target_state[:2], 0.0, float(self.cfg.grid_m - 1))
+        self.target_state[0] = np.clip(self.target_state[0], 0.0, float(self.cfg.grid_m - 1))
+        self.target_state[1] = np.clip(self.target_state[1], 0.0, float(self.cfg.grid_n - 1))
 
         detections = np.zeros(self.cfg.num_uavs, dtype=bool)
         measurement = None
