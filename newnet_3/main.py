@@ -12,7 +12,7 @@ from algo import MADDPG
 # ===========================
 # 1. 训练超参数设置
 # ===========================
-MAX_EPISODES = 15000  # 总训练回合数
+MAX_EPISODES = 5000  # 总训练回合数
 MAX_STEPS = 200  # 单回合最大步数 (对应论文中的 Time Step)
 EVAL_INTERVAL = 50  # 每多少回合评估一次
 SAVE_DIR = "./models"  # 模型保存路径
