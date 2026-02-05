@@ -614,7 +614,8 @@ class UAVSwarmEnv(gym.Env):
             est_positions = []
             for pf in self.particle_filters:
                 if pf.particles.size > 0:
-                    est_positions.append(np.mean(pf.particles, axis=0))
+                    # 粒子状态是 [x, y, v, phi]，观测几何只使用前两维避免维度不匹配
+                    est_positions.append(np.mean(pf.particles[:, :2], axis=0))
             if est_positions:
                 est_positions = np.array(est_positions)
                 diffs = est_positions - np.array([agent['x'], agent['y']])
