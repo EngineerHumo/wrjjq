@@ -23,6 +23,7 @@ RESULT_DIR = "./results"
 LOG_FILE = os.path.join(RESULT_DIR, "training_log.txt")
 TOP_K_MODELS = 10
 EVAL_SEEDS = get_eval_seeds()
+TARGET_TRAINING_SEQUENCE = [1, 2, 3, 4]
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
@@ -258,8 +259,16 @@ def maintain_topk_models(maddpg, top_models, episode, avg_min_all_detect_step, a
 # ===========================
 # 3. 训练主程序
 # ===========================
-if __name__ == "__main__":
-    env = UAVSwarmEnv()
+def run_training(target_count):
+    global SAVE_DIR, RESULT_DIR, LOG_FILE
+
+    SAVE_DIR = os.path.join("./models", f"target_{target_count}")
+    RESULT_DIR = os.path.join("./results", f"target_{target_count}")
+    LOG_FILE = os.path.join(RESULT_DIR, "training_log.txt")
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    os.makedirs(RESULT_DIR, exist_ok=True)
+
+    env = UAVSwarmEnv(n_target=target_count)
 
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
@@ -271,7 +280,7 @@ if __name__ == "__main__":
     all_detect_steps = []
     top_models = []
 
-    log(f"Start Training: UAVs={env.n_agents}, Map={Config.MAP_SIZE}x{Config.MAP_SIZE}...")
+    log(f"Start Training: UAVs={env.n_agents}, Targets={target_count}, Map={Config.MAP_SIZE}x{Config.MAP_SIZE}...")
     log(f"Evaluation uses {len(EVAL_SEEDS)} fixed seeds.")
 
     for i_episode in range(1, MAX_EPISODES + 1):
@@ -380,4 +389,9 @@ if __name__ == "__main__":
     plt.savefig(f"{RESULT_DIR}/training_result.png")
     plt.show()
 
-    log("Training Finished. Results saved.")
+    log(f"Training Finished for target_count={target_count}. Results saved.")
+
+
+if __name__ == "__main__":
+    for target_count in TARGET_TRAINING_SEQUENCE:
+        run_training(target_count)
