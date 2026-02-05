@@ -56,7 +56,7 @@ class Config:
     TARGET_SPEED_STD = 0.8  # 速度随机扰动
 
     # SISC-PF 软约束配置 (新增)
-    USE_SOFT_CONSTRAINT = False  # 【安全开关】默认关闭，保证现有训练不受影响
+    USE_SOFT_CONSTRAINT = True  # 【安全开关】默认关闭，保证现有训练不受影响
     PF_SOFT_K = 5.0  # 软约束硬度系数 (k)
     PF_SOFT_V_LIMIT = 30.0  # 软约束速度上限 (通常等于 V_MAX)
 
