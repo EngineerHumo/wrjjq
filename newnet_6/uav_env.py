@@ -69,18 +69,19 @@ class Target:
     实现论文 3.2.1 节的目标协同转弯(CT)模型
     """
 
-    def __init__(self):
-        self.x = np.random.uniform(0, Config.MAP_SIZE)
-        self.y = np.random.uniform(0, Config.MAP_SIZE)
-        self.v = np.random.uniform(*Config.TARGET_V_RANGE)
-        self.phi = np.random.uniform(0, 2 * np.pi)  # 航向角
-        self.omega = np.random.uniform(-0.1, 0.1)  # 转弯率
+    def __init__(self, rng):
+        self.rng = rng
+        self.x = self.rng.uniform(0, Config.MAP_SIZE)
+        self.y = self.rng.uniform(0, Config.MAP_SIZE)
+        self.v = self.rng.uniform(*Config.TARGET_V_RANGE)
+        self.phi = self.rng.uniform(0, 2 * np.pi)  # 航向角
+        self.omega = self.rng.uniform(-0.1, 0.1)  # 转弯率
 
     def step(self):
         # 随机扰动转向与速度，使目标呈现随机性运动
-        self.omega += np.random.normal(0.0, Config.TARGET_OMEGA_STD)
+        self.omega += self.rng.normal(0.0, Config.TARGET_OMEGA_STD)
         self.omega = np.clip(self.omega, -Config.TARGET_OMEGA_LIMIT, Config.TARGET_OMEGA_LIMIT)
-        self.v += np.random.normal(0.0, Config.TARGET_SPEED_STD)
+        self.v += self.rng.normal(0.0, Config.TARGET_SPEED_STD)
         self.v = np.clip(self.v, Config.TARGET_V_RANGE[0], Config.TARGET_V_RANGE[1])
 
         # 边界反弹逻辑 (简化处理，防止目标跑出地图)
@@ -109,8 +110,9 @@ class Target:
 # 3. 粒子滤波器 (Particle Filter)
 # ===========================
 class ParticleFilter:
-    def __init__(self, n_particles):
+    def __init__(self, n_particles, rng):
         self.n_particles = n_particles
+        self.rng = rng
         # 修改点1: 将粒子状态扩展为 4 维 [x, y, v, phi] 以支持软约束计算
         # 即使 USE_SOFT_CONSTRAINT=False，也初始化 4 维，但在逻辑中只更新前 2 维
         self.particles = np.zeros((n_particles, 4), dtype=np.float32)
@@ -119,18 +121,18 @@ class ParticleFilter:
 
     def _init_particles(self):
         # 初始化 x, y (全图均匀分布)
-        self.particles[:, 0] = np.random.uniform(0, Config.MAP_SIZE, self.n_particles)
-        self.particles[:, 1] = np.random.uniform(0, Config.MAP_SIZE, self.n_particles)
+        self.particles[:, 0] = self.rng.uniform(0, Config.MAP_SIZE, self.n_particles)
+        self.particles[:, 1] = self.rng.uniform(0, Config.MAP_SIZE, self.n_particles)
         # 初始化 v, phi (若开启软约束则需要合理初始化，否则置 0)
-        self.particles[:, 2] = np.random.uniform(Config.V_MIN, Config.V_MAX, self.n_particles)
-        self.particles[:, 3] = np.random.uniform(0, 2 * np.pi, self.n_particles)
+        self.particles[:, 2] = self.rng.uniform(Config.V_MIN, Config.V_MAX, self.n_particles)
+        self.particles[:, 3] = self.rng.uniform(0, 2 * np.pi, self.n_particles)
         self.weights.fill(1.0 / self.n_particles)
 
     def predict(self):
         if not Config.USE_SOFT_CONSTRAINT:
             # === 原有逻辑 (保持训练稳定性) ===
             # 仅对 x, y (前两列) 施加高斯噪声
-            noise = np.random.normal(0.0, Config.PF_MOTION_STD, size=(self.n_particles, 2))
+            noise = self.rng.normal(0.0, Config.PF_MOTION_STD, size=(self.n_particles, 2))
             self.particles[:, :2] += noise
             # 边界裁剪
             self.particles[:, 0] = np.clip(self.particles[:, 0], 0, Config.MAP_SIZE)
@@ -143,7 +145,7 @@ class ParticleFilter:
             dt = Config.DT
 
             # 简单假设 omega 扰动
-            omega = np.random.normal(0, Config.TARGET_OMEGA_STD, self.n_particles)
+            omega = self.rng.normal(0, Config.TARGET_OMEGA_STD, self.n_particles)
 
             # 状态更新
             # x += v * cos(phi) * dt
@@ -154,7 +156,7 @@ class ParticleFilter:
             self.particles[:, 3] += omega * dt
 
             # v 施加随机扰动
-            self.particles[:, 2] += np.random.normal(0, Config.TARGET_SPEED_STD, self.n_particles)
+            self.particles[:, 2] += self.rng.normal(0, Config.TARGET_SPEED_STD, self.n_particles)
 
             # 2. 应用软约束 (Soft Constraint)
             self.apply_soft_constraint()
@@ -213,7 +215,7 @@ class ParticleFilter:
         cumulative = np.cumsum(self.weights)
         cumulative[-1] = 1.0
         step = 1.0 / self.n_particles
-        start = np.random.uniform(0, step)
+        start = self.rng.uniform(0, step)
         points = start + step * np.arange(self.n_particles)
         indexes = np.searchsorted(cumulative, points)
         indexes = np.clip(indexes, 0, self.n_particles - 1)
@@ -272,6 +274,8 @@ class UAVSwarmEnv(gym.Env):
         self.global_map_prob = np.zeros((Config.GRID_ROWS, Config.GRID_COLS))  # 目标存在概率图
         self.global_map_cover = np.zeros((Config.GRID_ROWS, Config.GRID_COLS))  # 覆盖图 [cite: 289]
 
+        self.rng = np.random.default_rng()
+
         # 初始化障碍物 (固定或随机)
         self._init_obstacles()
         self.particle_filters = []
@@ -282,13 +286,15 @@ class UAVSwarmEnv(gym.Env):
     def _init_obstacles(self):
         # 随机生成几个圆形障碍物 [cite: 358]
         for _ in range(5):
-            x = np.random.uniform(200, 800)
-            y = np.random.uniform(200, 800)
-            r = np.random.uniform(30, 60)
+            x = self.rng.uniform(200, 800)
+            y = self.rng.uniform(200, 800)
+            r = self.rng.uniform(30, 60)
             self.obstacles.append((x, y, r))
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        # 使用环境私有 RNG，避免算法内部随机数(如探索噪声)污染环境随机过程
+        self.rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
 
         self.obstacles = []
         self._init_obstacles()
@@ -297,17 +303,17 @@ class UAVSwarmEnv(gym.Env):
         self.agents = []
         for i in range(self.n_agents):
             agent = {
-                'x': np.random.uniform(0, 100),  # 起始区
-                'y': np.random.uniform(0, 100),
+                'x': self.rng.uniform(0, 100),  # 起始区
+                'y': self.rng.uniform(0, 100),
                 'v': Config.V_MIN,
-                'phi': np.random.uniform(0, np.pi / 2),
+                'phi': self.rng.uniform(0, np.pi / 2),
                 'id': i
             }
             self.agents.append(agent)
 
         # 初始化目标
-        self.targets = [Target() for _ in range(self.n_targets)]
-        self.particle_filters = [ParticleFilter(Config.N_PARTICLES) for _ in range(self.n_targets)]
+        self.targets = [Target(self.rng) for _ in range(self.n_targets)]
+        self.particle_filters = [ParticleFilter(Config.N_PARTICLES, self.rng) for _ in range(self.n_targets)]
         self.target_detected_by = [None for _ in range(self.n_targets)]
 
         # 重置地图
