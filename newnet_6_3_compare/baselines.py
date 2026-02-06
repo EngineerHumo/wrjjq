@@ -22,8 +22,13 @@ class LawnmowerController:
     def __init__(self, env):
         self.env = env
         self.lane_spacing = max(2 * Config.SENSOR_RANGE * 0.9, Config.GRID_WIDTH)
+        self.lane_targets = []
+        self.directions = []
+        self.reset()
+
+    def reset(self):
         self.lane_targets = self._init_lanes()
-        self.directions = [1 for _ in range(env.n_agents)]
+        self.directions = [1 for _ in range(self.env.n_agents)]
 
     def _init_lanes(self):
         lanes = []
@@ -70,6 +75,9 @@ class LawnmowerController:
 class GreedyAPFController:
     def __init__(self, env):
         self.env = env
+
+    def reset(self):
+        return None
 
     def select_actions(self):
         actions = []

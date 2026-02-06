@@ -73,6 +73,8 @@ def evaluate_policy(env, policy, eval_seeds, max_steps=200, coverage_steps=100):
 
     for seed in eval_seeds:
         obs_n, _ = env.reset(seed=seed)
+        if hasattr(policy, "reset"):
+            policy.reset()
         target_seen_once = np.zeros(env.n_targets, dtype=bool)
         min_all_detect_step = max_steps + 1
         total_detect_this_episode = 0
