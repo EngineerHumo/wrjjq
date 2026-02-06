@@ -139,7 +139,7 @@ def main():
         training_histories = {}
         if not args.skip_train:
             maddpg_dir = os.path.join(model_dir, "maddpg_pf")
-            _, maddpg_hist = train_maddpg(
+            _maddpg_saved, maddpg_hist = train_maddpg(
                 maddpg_dir,
                 args.n_uav,
                 target_count,
@@ -152,7 +152,7 @@ def main():
             training_histories["MADDPG"] = maddpg_hist
 
             ablation_dir = os.path.join(model_dir, "maddpg_no_pf")
-            _, ablation_hist = train_maddpg(
+            _maddpg_no_pf_saved, ablation_hist = train_maddpg(
                 ablation_dir,
                 args.n_uav,
                 target_count,
@@ -165,7 +165,7 @@ def main():
             training_histories["MADDPG-NoPF"] = ablation_hist
 
             iddpg_dir = os.path.join(model_dir, "iddpg")
-            _, iddpg_hist = train_iddpg(
+            _iddpg_saved, iddpg_hist = train_iddpg(
                 iddpg_dir,
                 args.n_uav,
                 target_count,
