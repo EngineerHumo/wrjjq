@@ -73,7 +73,7 @@ def main():
             top_models = saved_models["top_models"]
             episode_4000_path = saved_models["episode_4000"]
         else:
-            top_models, episode_4000_path = load_saved_models(os.path.join(model_dir, "models"))
+            top_models, episode_4000_path = load_saved_models(model_dir)
 
         entries = _collect_model_entries(top_models, episode_4000_path)
         if not entries:
