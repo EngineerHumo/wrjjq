@@ -154,9 +154,17 @@ def evaluate_rank_model(env, maddpg, eval_seeds, config_cls, max_steps=200, cove
 
 
 def find_rank01_weights(target_dir: Path) -> Path:
-    top_models_dir = target_dir / "models" / "top_models"
-    if not top_models_dir.exists():
-        raise FileNotFoundError(f"未找到目录: {top_models_dir}")
+    candidate_top_models_dirs = [
+        target_dir / "top_models",
+        target_dir / "models" / "top_models",
+    ]
+
+    top_models_dir = next((p for p in candidate_top_models_dirs if p.exists()), None)
+    if top_models_dir is None:
+        raise FileNotFoundError(
+            "未找到 top_models 目录，已尝试: "
+            + ", ".join(str(path) for path in candidate_top_models_dirs)
+        )
 
     rank_dirs = sorted(
         [p for p in top_models_dir.iterdir() if p.is_dir() and p.name.startswith("rank_01")]
