@@ -15,7 +15,7 @@ class Config:
 
     # 无人机参数 (UAV)
     N_UAV_RANGE = (3, 8)  # 无人机数量范围
-    N_UAV = 3  # 默认无人机数量
+    N_UAV = 7  # 默认无人机数量
     V_MIN = 10.0  # 最小速度 (m/s) [cite: 311]
     V_MAX = 30.0  # 最大速度 (m/s) [cite: 311]
     MAX_ACC = 5.0  # 最大加速度 (m/s^2) [cite: 304]
@@ -240,11 +240,13 @@ class ParticleFilter:
 # 4. 核心环境类 (Gymnasium Interface)
 # ===========================
 class UAVSwarmEnv(gym.Env):
-    def __init__(self, n_uav=None, n_target=None):
+    def __init__(self, n_uav=None, n_target=None, use_pf=True, use_pf_obs=True):
         super(UAVSwarmEnv, self).__init__()
 
         n_uav = Config.N_UAV if n_uav is None else n_uav
         n_target = Config.N_TARGET if n_target is None else n_target
+        self.use_pf = use_pf
+        self.use_pf_obs = use_pf_obs
 
         if not (Config.N_UAV_RANGE[0] <= n_uav <= Config.N_UAV_RANGE[1]):
             raise ValueError(f"n_uav must be in range {Config.N_UAV_RANGE}, got {n_uav}")
@@ -258,7 +260,10 @@ class UAVSwarmEnv(gym.Env):
         # 定义观测空间: 论文表 3-4 [cite: 298]
         # 包含: 自身(x,y,v,phi) + 局部障碍物 + 局部概率 + 邻居信息 + 局部覆盖
         # 这里为了简化网络输入，将 Observation 扁平化为一个向量
-        obs_dim = 4 + 3 + 2 + 3 + (n_uav - 1) * 2 + 1
+        pf_obs_dim = 0
+        if self.use_pf_obs:
+            pf_obs_dim = 2 + 3
+        obs_dim = 4 + 3 + pf_obs_dim + (n_uav - 1) * 2 + 1
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
 
         self.n_agents = n_uav
@@ -313,7 +318,10 @@ class UAVSwarmEnv(gym.Env):
 
         # 初始化目标
         self.targets = [Target(self.rng) for _ in range(self.n_targets)]
-        self.particle_filters = [ParticleFilter(Config.N_PARTICLES, self.rng) for _ in range(self.n_targets)]
+        if self.use_pf:
+            self.particle_filters = [ParticleFilter(Config.N_PARTICLES, self.rng) for _ in range(self.n_targets)]
+        else:
+            self.particle_filters = []
         self.target_detected_by = [None for _ in range(self.n_targets)]
 
         # 重置地图
@@ -404,11 +412,12 @@ class UAVSwarmEnv(gym.Env):
                 detected_agents.sort(key=lambda item: item[1])
                 detected_by[target_idx] = detected_agents[0][0]
 
-            pf = self.particle_filters[target_idx]
-            pf.predict()
-            pf.update(self.agents, detections)
-            pf.resample()
-            target_maps.append(pf.estimate_map())
+            if self.use_pf:
+                pf = self.particle_filters[target_idx]
+                pf.predict()
+                pf.update(self.agents, detections)
+                pf.resample()
+                target_maps.append(pf.estimate_map())
 
         self.target_detected_by = detected_by
         if target_maps:
@@ -613,40 +622,42 @@ class UAVSwarmEnv(gym.Env):
             obs_body_y / Config.SENSOR_RANGE
         ]
 
-        # 3. 粒子滤波估计目标相对向量 (Body Frame)
-        pf_dx = 0.0
-        pf_dy = 0.0
-        if self.particle_filters:
-            est_positions = []
-            for pf in self.particle_filters:
-                if pf.particles.size > 0:
-                    # 粒子状态是 [x, y, v, phi]，观测几何只使用前两维避免维度不匹配
-                    est_positions.append(np.mean(pf.particles[:, :2], axis=0))
-            if est_positions:
-                est_positions = np.array(est_positions)
-                diffs = est_positions - np.array([agent['x'], agent['y']])
-                dist_sq = np.sum(diffs ** 2, axis=1)
-                nearest_idx = int(np.argmin(dist_sq))
-                pf_dx = diffs[nearest_idx][0]
-                pf_dy = diffs[nearest_idx][1]
-
-        pf_body_x = pf_dx * cos_phi + pf_dy * sin_phi
-        pf_body_y = -pf_dx * sin_phi + pf_dy * cos_phi
-        pf_info = [
-            pf_body_x / Config.MAP_SIZE,
-            pf_body_y / Config.MAP_SIZE
-        ]
-
-        # 4. 局部概率特征 (最大值, 均值, 梯度方向) [cite: 298]
-        # 提取局部网格
+        pf_info = []
+        local_prob = []
         m, n = self._pos_to_grid(agent['x'], agent['y'])
-        # 简化：直接取当前网格的概率
-        agent_map = self.agent_map_prob[agent_index] if self.agent_map_prob else self.global_map_prob
-        local_prob = [
-            agent_map[m, n],
-            float(np.mean(agent_map)),  # 简化的全局/局部感知
-            0.0  # 梯度暂略
-        ]
+        if self.use_pf_obs:
+            # 3. 粒子滤波估计目标相对向量 (Body Frame)
+            pf_dx = 0.0
+            pf_dy = 0.0
+            if self.particle_filters:
+                est_positions = []
+                for pf in self.particle_filters:
+                    if pf.particles.size > 0:
+                        # 粒子状态是 [x, y, v, phi]，观测几何只使用前两维避免维度不匹配
+                        est_positions.append(np.mean(pf.particles[:, :2], axis=0))
+                if est_positions:
+                    est_positions = np.array(est_positions)
+                    diffs = est_positions - np.array([agent['x'], agent['y']])
+                    dist_sq = np.sum(diffs ** 2, axis=1)
+                    nearest_idx = int(np.argmin(dist_sq))
+                    pf_dx = diffs[nearest_idx][0]
+                    pf_dy = diffs[nearest_idx][1]
+
+            pf_body_x = pf_dx * cos_phi + pf_dy * sin_phi
+            pf_body_y = -pf_dx * sin_phi + pf_dy * cos_phi
+            pf_info = [
+                pf_body_x / Config.MAP_SIZE,
+                pf_body_y / Config.MAP_SIZE
+            ]
+
+            # 4. 局部概率特征 (最大值, 均值, 梯度方向) [cite: 298]
+            # 提取局部网格
+            agent_map = self.agent_map_prob[agent_index] if self.agent_map_prob else self.global_map_prob
+            local_prob = [
+                agent_map[m, n],
+                float(np.mean(agent_map)),  # 简化的全局/局部感知
+                0.0  # 梯度暂略
+            ]
 
         # 5. 邻居信息 (相对位置) [cite: 298]
         neighbor_info = []

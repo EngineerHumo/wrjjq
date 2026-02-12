@@ -23,7 +23,7 @@ RESULT_DIR = "./results"
 LOG_FILE = os.path.join(RESULT_DIR, "training_log.txt")
 TOP_K_MODELS = 10
 EVAL_SEEDS = get_eval_seeds()
-TARGET_TRAINING_SEQUENCE = [1, 2, 3, 4]
+TARGET_TRAINING_SEQUENCE = [1, 2, 3, 4, 5]
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
@@ -156,6 +156,7 @@ def evaluate(env, maddpg, eval_seeds):
     total_reward = 0.0
     total_min_all_detect_step = 0.0
     total_detection_count = 0.0
+    seed_records = []
 
     for seed in eval_seeds:
         obs_n, _ = env.reset(seed=seed)
@@ -184,12 +185,19 @@ def evaluate(env, maddpg, eval_seeds):
         total_reward += episode_reward
         total_min_all_detect_step += min_all_detect_step
         total_detection_count += total_detect_this_episode
+        seed_records.append({
+            "seed": int(seed),
+            "episode_reward": float(episode_reward),
+            "min_all_detect_step": float(min_all_detect_step),
+            "total_detection_count": float(total_detect_this_episode),
+        })
 
     n_episodes = len(eval_seeds)
     return (
         total_reward / n_episodes,
         total_min_all_detect_step / n_episodes,
         total_detection_count / n_episodes,
+        seed_records,
     )
 
 
@@ -279,6 +287,7 @@ def run_training(target_count):
     scores = []
     all_detect_steps = []
     top_models = []
+    eval_seed_details = []
 
     log(f"Start Training: UAVs={env.n_agents}, Targets={target_count}, Map={Config.MAP_SIZE}x{Config.MAP_SIZE}...")
     log(f"Evaluation uses {len(EVAL_SEEDS)} fixed seeds.")
@@ -353,8 +362,17 @@ def run_training(target_count):
             plot_reward_curve(RESULT_DIR, scores, [50, 100], i_episode)
 
         if i_episode % EVAL_INTERVAL == 0:
-            eval_reward, avg_min_all_detect_step, avg_total_detection_count = evaluate(env, maddpg, EVAL_SEEDS)
+            eval_reward, avg_min_all_detect_step, avg_total_detection_count, seed_records = evaluate(env, maddpg, EVAL_SEEDS)
             all_detect_steps.append(avg_min_all_detect_step)
+
+            eval_seed_details.append({
+                "episode": i_episode,
+                "target_count": target_count,
+                "n_uav": env.n_agents,
+                "seed_metrics": seed_records,
+            })
+            with open(os.path.join(RESULT_DIR, "eval_seed_details.json"), "w", encoding="utf-8") as f:
+                json.dump(eval_seed_details, f, indent=2, ensure_ascii=False)
 
             log(f"\n--- Evaluation @ Ep {i_episode} ---")
             log(f"Avg Reward: {eval_reward:.2f}")
