@@ -6,7 +6,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-BASE_DIR = Path('/workspace/wrjjq')
+BASE_DIR = Path('')
 OUTPUT_PATH = Path('/home/wensheng/gjq_workspace/wrjjq/compare_metrics_summary.xlsx')
 
 METHOD_PATHS = OrderedDict(
