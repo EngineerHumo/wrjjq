@@ -6,7 +6,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-from baselines import GreedyAPFController, LawnmowerController
 from eval_seeds import get_eval_seeds
 from iddpg import IDDPG
 from maddpg import MADDPG
@@ -109,7 +108,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-uav", type=int, required=True)
     parser.add_argument("--n-target", type=int)
-    parser.add_argument("--target-list", type=str, default="1,2,3,4")
+    parser.add_argument("--target-list", type=str, default="1,2,3,4,5")
     parser.add_argument("--max-episodes", type=int, default=5000)
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--eval-interval", type=int, default=50)
@@ -177,24 +176,6 @@ def main():
 
         eval_seeds = get_eval_seeds()
         metrics_all = {}
-
-        env = UAVSwarmEnv(n_uav=args.n_uav, n_target=target_count, use_pf=True, use_pf_obs=True)
-        controller = LawnmowerController(env)
-        metrics_all["Lawnmower"] = evaluate_policy(
-            env,
-            EnvControllerPolicy(controller),
-            eval_seeds,
-            max_steps=args.max_steps,
-        )
-
-        env = UAVSwarmEnv(n_uav=args.n_uav, n_target=target_count, use_pf=True, use_pf_obs=True)
-        controller = GreedyAPFController(env)
-        metrics_all["Greedy-APF"] = evaluate_policy(
-            env,
-            EnvControllerPolicy(controller),
-            eval_seeds,
-            max_steps=args.max_steps,
-        )
 
         env = UAVSwarmEnv(n_uav=args.n_uav, n_target=target_count, use_pf=True, use_pf_obs=True)
         obs_dim = env.observation_space.shape[0]

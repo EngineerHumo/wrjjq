@@ -113,6 +113,7 @@ def evaluate_policy(env, policy, eval_seeds, max_steps=200, coverage_steps=100):
         coverage_efficiencies.append(coverage_step_value)
 
     return {
+        "eval_seeds": [int(seed) for seed in eval_seeds],
         "min_all_detect_steps": min_all_detect_steps,
         "total_detection_counts": total_detection_counts,
         "overlap_rates": overlap_rates,

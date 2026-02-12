@@ -68,11 +68,28 @@ def summarize_metrics(metrics):
     }
 
 
+def _to_per_seed_records(metrics):
+    seeds = metrics.get("eval_seeds", [])
+    return [
+        {
+            "seed": int(seed),
+            "min_all_detect_step": float(metrics["min_all_detect_steps"][idx]),
+            "total_detection_count": float(metrics["total_detection_counts"][idx]),
+            "overlap_rate": float(metrics["overlap_rates"][idx]),
+            "collision_count": float(metrics["collision_counts"][idx]),
+            "coverage_efficiency": float(metrics["coverage_efficiencies"][idx]),
+        }
+        for idx, seed in enumerate(seeds)
+    ]
+
+
 def save_metrics(result_dir, metrics_map):
     ensure_dir(result_dir)
     summary = {name: summarize_metrics(metrics) for name, metrics in metrics_map.items()}
+    per_seed = {name: _to_per_seed_records(metrics) for name, metrics in metrics_map.items()}
     save_json(os.path.join(result_dir, "metrics_raw.json"), metrics_map)
     save_json(os.path.join(result_dir, "metrics_summary.json"), summary)
+    save_json(os.path.join(result_dir, "metrics_per_seed.json"), per_seed)
     return summary
 
 

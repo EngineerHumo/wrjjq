@@ -34,7 +34,7 @@ def _collect_model_entries(top_models, episode_4000_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-uav", type=int, required=True)
-    parser.add_argument("--target-list", type=str, default="1,2,3,4")
+    parser.add_argument("--target-list", type=str, default="1,2,3,4,5")
     parser.add_argument("--max-episodes", type=int, default=5000)
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--eval-interval", type=int, default=50)

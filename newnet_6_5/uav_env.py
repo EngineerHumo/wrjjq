@@ -8,13 +8,13 @@ from gymnasium import spaces
 # ===========================
 class Config:
     # 地图与栅格
-    MAP_SIZE = 1000.0  # 地图边长 (米) [cite: 263]
+    MAP_SIZE = 1200.0  # 地图边长 (米) [cite: 263]
     GRID_ROWS = 50  # 栅格行数
     GRID_COLS = 50  # 栅格列数
     GRID_WIDTH = MAP_SIZE / GRID_COLS  # 20m
 
     # 无人机参数 (UAV)
-    N_UAV_RANGE = (3, 6)  # 无人机数量范围
+    N_UAV_RANGE = (3, 8)  # 无人机数量范围
     N_UAV = 5  # 默认无人机数量
     V_MIN = 10.0  # 最小速度 (m/s) [cite: 311]
     V_MAX = 30.0  # 最大速度 (m/s) [cite: 311]
@@ -26,7 +26,7 @@ class Config:
     SAFE_DIST_UAV = 20.0  # 无人机避碰距离 [cite: 320]
 
     # 目标参数 (Target)
-    N_TARGET_RANGE = (1, 4)  # 目标数量范围
+    N_TARGET_RANGE = (1, 5)  # 目标数量范围
     N_TARGET = 1  # 默认目标数量
     TARGET_V_RANGE = [5.0, 15.0]  # 目标速度范围
     DT = 1.0  # 仿真步长 (s) [cite: 121]
@@ -286,8 +286,8 @@ class UAVSwarmEnv(gym.Env):
     def _init_obstacles(self):
         # 随机生成几个圆形障碍物 [cite: 358]
         for _ in range(5):
-            x = self.rng.uniform(200, 800)
-            y = self.rng.uniform(200, 800)
+            x = self.rng.uniform(200, 1000)
+            y = self.rng.uniform(200, 1000)
             r = self.rng.uniform(30, 60)
             self.obstacles.append((x, y, r))
 

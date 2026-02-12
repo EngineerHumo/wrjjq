@@ -15,7 +15,7 @@ class Config:
 
     # 无人机参数 (UAV)
     N_UAV_RANGE = (3, 8)  # 无人机数量范围
-    N_UAV = 3  # 默认无人机数量
+    N_UAV = 7  # 默认无人机数量
     V_MIN = 10.0  # 最小速度 (m/s) [cite: 311]
     V_MAX = 30.0  # 最大速度 (m/s) [cite: 311]
     MAX_ACC = 5.0  # 最大加速度 (m/s^2) [cite: 304]
