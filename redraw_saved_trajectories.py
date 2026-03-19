@@ -325,6 +325,43 @@ def build_runner(model: ModelEntry):
 
 
 
+
+
+def validate_model_checkpoint(model: ModelEntry) -> List[str]:
+    issues = []
+    if not model.model_path.exists():
+        return [f"model path does not exist: {model.model_path}"]
+
+    actor_files = sorted(model.model_path.glob("agent_*_actor.pth"))
+    critic_files = sorted(model.model_path.glob("agent_*_critic.pth"))
+    pth_files = sorted(model.model_path.glob("*.pth"))
+
+    if not pth_files:
+        issues.append(f"no .pth files found in {model.model_path}")
+        return issues
+
+    if len(actor_files) != len(critic_files):
+        issues.append(
+            f"actor/critic file count mismatch under {model.model_path}: "
+            f"actors={len(actor_files)}, critics={len(critic_files)}"
+        )
+
+    if actor_files and len(actor_files) != model.n_uav:
+        issues.append(
+            f"actor file count does not match n_uav for {model.model_path}: "
+            f"actors={len(actor_files)}, n_uav={model.n_uav}"
+        )
+
+    return issues
+
+
+def save_summary(output_root: Path, network_name: str, payload: Dict[str, object]):
+    out_dir = output_root / network_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = out_dir / "redraw_summary.json"
+    summary_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return summary_path
+
 def model_entry_to_dict(model: ModelEntry) -> Dict[str, object]:
     return {
         "network_dir": model.network_dir,
@@ -352,18 +389,39 @@ def dry_run_network(network_name: str) -> Dict[str, object]:
     }
 
 
-def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict[str, int]:
+def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict[str, object]:
     network_dir = REPO_ROOT / network_name
     seeds = get_eval_seeds(network_dir)
     models = collect_models(network_name)
     saved = 0
     skipped = 0
+    errors = []
 
     for model in models:
+        validation_issues = validate_model_checkpoint(model)
+        if validation_issues:
+            skipped += len(seeds)
+            errors.append({
+                "stage": "validate_model",
+                "network": model.network_dir,
+                "model_name": model.model_name,
+                "model_path": str(model.model_path),
+                "issues": validation_issues,
+            })
+            print(f"[WARN] skip model {model.network_dir}/{model.model_name}: {validation_issues}")
+            continue
+
         try:
             env, select_actions, map_size = build_runner(model)
         except Exception as exc:
             skipped += len(seeds)
+            errors.append({
+                "stage": "load_model",
+                "network": model.network_dir,
+                "model_name": model.model_name,
+                "model_path": str(model.model_path),
+                "error": str(exc),
+            })
             print(f"[WARN] skip model {model.network_dir}/{model.model_name}: load failed: {exc}")
             continue
 
@@ -385,8 +443,21 @@ def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict
                 saved += 1
             except Exception as exc:
                 skipped += 1
+                errors.append({
+                    "stage": "run_seed",
+                    "network": model.network_dir,
+                    "model_name": model.model_name,
+                    "model_path": str(model.model_path),
+                    "seed": int(seed),
+                    "seed_idx": int(seed_idx),
+                    "error": str(exc),
+                })
                 print(f"[WARN] failed seed {seed} for {model.network_dir}/{model.model_name}: {exc}")
-    return {"models": len(models), "saved": saved, "skipped": skipped, "seeds": len(seeds)}
+
+    summary = {"models": len(models), "saved": saved, "skipped": skipped, "seeds": len(seeds), "errors": errors}
+    summary_path = save_summary(output_root, network_name, summary)
+    summary["summary_path"] = str(summary_path)
+    return summary
 
 
 def parse_args():
