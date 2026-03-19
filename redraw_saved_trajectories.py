@@ -159,6 +159,8 @@ def run_until_all_targets_detected(env, select_actions: Callable, seed: int, max
 
 def collect_standard_models(network_dir: Path) -> List[ModelEntry]:
     entries: List[ModelEntry] = []
+    seen_keys = set()
+    n_uav = parse_n_uav_from_network_name(network_dir.name)
     for summary_path in sorted(network_dir.glob("models_2k/target_*/top_models/top_models_summary.json")):
         n_target = int(summary_path.parent.parent.name.split("_")[-1])
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -169,9 +171,47 @@ def collect_standard_models(network_dir: Path) -> List[ModelEntry]:
             model_path = summary_path.parent / f"rank_{rank:02d}_ep_{episode}_step_{step_str}" / "weights"
             if not model_path.exists():
                 continue
-            entries.append(ModelEntry(network_dir.name, "standard", f"top_rank{rank:02d}_ep{episode}", parse_n_uav_from_network_name(network_dir.name), n_target, network_dir.name, model_path))
+            _append_if_exists(entries, seen_keys, ModelEntry(network_dir.name, "standard", f"top_rank{rank:02d}_ep{episode}", n_uav, n_target, network_dir.name, model_path))
+    for entry in _discover_pth_model_dirs(network_dir, "standard"):
+        _append_if_exists(entries, seen_keys, entry)
     return entries
 
+
+
+
+def _sanitize_model_name(path: Path) -> str:
+    return "__".join(path.parts)
+
+
+def _infer_compare_model_config(relative_dir: Path):
+    path_str = relative_dir.as_posix()
+    if "/iddpg/" in f"/{path_str}/" or path_str.startswith("iddpg/"):
+        return "iddpg", True, True
+    if "maddpg_no_pf" in path_str or "maddpg_nopf" in path_str:
+        return "maddpg_nopf", False, False
+    return "maddpg_pf", True, True
+
+
+def _discover_pth_model_dirs(network_dir: Path, family: str) -> List[ModelEntry]:
+    entries: List[ModelEntry] = []
+    seen_keys = set()
+    n_uav = parse_n_uav_from_network_name(network_dir.name)
+    pth_dirs = sorted({pth.parent for pth in network_dir.rglob("*.pth")})
+    for model_dir in pth_dirs:
+        target_dir = next((parent for parent in model_dir.parents if parent.name.startswith("target_")), None)
+        if target_dir is None:
+            continue
+        n_target = int(target_dir.name.split("_")[-1])
+        relative_dir = model_dir.relative_to(network_dir)
+        if family == "compare":
+            model_name_prefix, use_pf, use_pf_obs = _infer_compare_model_config(relative_dir)
+            model_name = f"{model_name_prefix}__{_sanitize_model_name(relative_dir)}"
+            entry = ModelEntry(network_dir.name, family, model_name, n_uav, n_target, network_dir.name, model_dir, use_pf, use_pf_obs)
+        else:
+            model_name = f"standard__{_sanitize_model_name(relative_dir)}"
+            entry = ModelEntry(network_dir.name, family, model_name, n_uav, n_target, network_dir.name, model_dir)
+        _append_if_exists(entries, seen_keys, entry)
+    return entries
 
 def _append_if_exists(entries: List[ModelEntry], seen_keys: set, entry: ModelEntry):
     key = (entry.network_dir, entry.model_name, entry.n_target, str(entry.model_path))
@@ -233,6 +273,8 @@ def collect_compare_models(network_dir: Path) -> List[ModelEntry]:
                 resolved = resolve_existing_path(payload.get("path", ""), network_dir)
                 if resolved is not None:
                     _append_if_exists(entries, seen_keys, ModelEntry(network_dir.name, "compare", f"{algo_name}_episode4000", n_uav, n_target, network_dir.name, resolved, use_pf, use_pf_obs))
+    for entry in _discover_pth_model_dirs(network_dir, "compare"):
+        _append_if_exists(entries, seen_keys, entry)
     return entries
 
 
