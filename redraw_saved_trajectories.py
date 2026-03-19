@@ -6,11 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-import matplotlib
-import matplotlib.pyplot as plt
-import numpy as np
-
-matplotlib.use("Agg")
 
 REPO_ROOT = Path(__file__).resolve().parent
 STANDARD_DIRS = [f"newnet_6_{idx}" for idx in range(3, 9)]
@@ -94,6 +89,11 @@ def make_output_name(model: ModelEntry, seed_idx: int, seed: int) -> str:
 
 
 def plot_trajectories(map_size, obstacles, uav_trajectories, target_trajectories, detection_points, out_path: Path, title: str):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
     plt.figure(figsize=(8, 8))
     ax = plt.gca()
     boundary = plt.Rectangle((0, 0), map_size, map_size, fill=False, edgecolor="black", linestyle="--", linewidth=1.5)
@@ -135,6 +135,8 @@ def plot_trajectories(map_size, obstacles, uav_trajectories, target_trajectories
 
 
 def run_until_all_targets_detected(env, select_actions: Callable, seed: int, max_steps: int):
+    import numpy as np
+
     obs_n, _ = env.reset(seed=seed)
     target_seen_once = np.zeros(env.n_targets, dtype=bool)
     stop_step = max_steps
@@ -171,8 +173,19 @@ def collect_standard_models(network_dir: Path) -> List[ModelEntry]:
     return entries
 
 
+def _append_if_exists(entries: List[ModelEntry], seen_keys: set, entry: ModelEntry):
+    key = (entry.network_dir, entry.model_name, entry.n_target, str(entry.model_path))
+    if key in seen_keys:
+        return
+    seen_keys.add(key)
+    entries.append(entry)
+
+
+
 def collect_compare_models(network_dir: Path) -> List[ModelEntry]:
     entries: List[ModelEntry] = []
+    seen_keys = set()
+    n_uav = parse_n_uav_from_network_name(network_dir.name)
 
     for summary_path in sorted(network_dir.glob("compare_results_100/maddpg_our_method/models/target_*/top_models/top_models_summary.json")):
         n_target = int(summary_path.parent.parent.name.split("_")[-1])
@@ -184,17 +197,27 @@ def collect_compare_models(network_dir: Path) -> List[ModelEntry]:
             model_path = summary_path.parent / f"rank_{rank:02d}_ep_{episode}_step_{step_str}" / "weights"
             if not model_path.exists():
                 continue
-            entries.append(ModelEntry(network_dir.name, "compare", f"maddpg_pf_rank{rank:02d}_ep{episode}", parse_n_uav_from_network_name(network_dir.name), n_target, network_dir.name, model_path, True, True))
+            _append_if_exists(entries, seen_keys, ModelEntry(network_dir.name, "compare", f"maddpg_pf_rank{rank:02d}_ep{episode}", n_uav, n_target, network_dir.name, model_path, True, True))
 
-    baseline_configs = [
-        ("maddpg_nopf", False, False, "top_models.json", "episode_4000.json"),
-        ("iddpg", True, True, "top_models.json", "episode_4000.json"),
+    layout_configs = [
+        ("compare_results/target_*/models/maddpg_pf/models", "maddpg_pf", True, True),
+        ("compare_results/target_*/models/maddpg_no_pf/models", "maddpg_nopf", False, False),
+        ("compare_results/target_*/models/iddpg/models", "iddpg", True, True),
+        ("compare_results_100/maddpg_nopf/target_*/models/maddpg_no_pf/models", "maddpg_nopf", False, False),
+        ("compare_results_100/iddpg/target_*/models/iddpg/models", "iddpg", True, True),
     ]
-    for algo_name, use_pf, use_pf_obs, top_name, last_name in baseline_configs:
-        pattern = f"compare_results_100/{algo_name}/target_*/models/*/models"
+    for pattern, algo_name, use_pf, use_pf_obs in layout_configs:
         for models_dir in sorted(network_dir.glob(pattern)):
-            n_target = int(models_dir.parents[2].name.split("_")[-1])
-            top_path = models_dir / top_name
+            target_dir = next((parent for parent in models_dir.parents if parent.name.startswith("target_")), None)
+            if target_dir is None:
+                continue
+            n_target = int(target_dir.name.split("_")[-1])
+
+            best_dir = models_dir / "best"
+            if best_dir.exists():
+                _append_if_exists(entries, seen_keys, ModelEntry(network_dir.name, "compare", f"{algo_name}_best", n_uav, n_target, network_dir.name, best_dir, use_pf, use_pf_obs))
+
+            top_path = models_dir / "top_models.json"
             if top_path.exists():
                 payload = json.loads(top_path.read_text(encoding="utf-8"))
                 for idx, rec in enumerate(payload.get("top_models", []), start=1):
@@ -202,13 +225,14 @@ def collect_compare_models(network_dir: Path) -> List[ModelEntry]:
                     if resolved is None:
                         continue
                     episode = int(rec.get("episode", -1))
-                    entries.append(ModelEntry(network_dir.name, "compare", f"{algo_name}_top{idx:02d}_ep{episode}", parse_n_uav_from_network_name(network_dir.name), n_target, network_dir.name, resolved, use_pf, use_pf_obs))
-            last_path = models_dir / last_name
+                    _append_if_exists(entries, seen_keys, ModelEntry(network_dir.name, "compare", f"{algo_name}_top{idx:02d}_ep{episode}", n_uav, n_target, network_dir.name, resolved, use_pf, use_pf_obs))
+
+            last_path = models_dir / "episode_4000.json"
             if last_path.exists():
                 payload = json.loads(last_path.read_text(encoding="utf-8"))
                 resolved = resolve_existing_path(payload.get("path", ""), network_dir)
                 if resolved is not None:
-                    entries.append(ModelEntry(network_dir.name, "compare", f"{algo_name}_episode4000", parse_n_uav_from_network_name(network_dir.name), n_target, network_dir.name, resolved, use_pf, use_pf_obs))
+                    _append_if_exists(entries, seen_keys, ModelEntry(network_dir.name, "compare", f"{algo_name}_episode4000", n_uav, n_target, network_dir.name, resolved, use_pf, use_pf_obs))
     return entries
 
 
@@ -257,6 +281,35 @@ def build_runner(model: ModelEntry):
     return build_compare_policy(network_dir, model)
 
 
+
+
+def model_entry_to_dict(model: ModelEntry) -> Dict[str, object]:
+    return {
+        "network_dir": model.network_dir,
+        "family": model.family,
+        "model_name": model.model_name,
+        "n_uav": model.n_uav,
+        "n_target": model.n_target,
+        "label": model.label,
+        "model_path": str(model.model_path),
+        "use_pf": model.use_pf,
+        "use_pf_obs": model.use_pf_obs,
+    }
+
+
+def dry_run_network(network_name: str) -> Dict[str, object]:
+    network_dir = REPO_ROOT / network_name
+    seeds = get_eval_seeds(network_dir)
+    models = collect_models(network_name)
+    return {
+        "network": network_name,
+        "network_dir": str(network_dir),
+        "seed_count": len(seeds),
+        "model_count": len(models),
+        "models": [model_entry_to_dict(model) for model in models],
+    }
+
+
 def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict[str, int]:
     network_dir = REPO_ROOT / network_name
     seeds = get_eval_seeds(network_dir)
@@ -299,6 +352,7 @@ def parse_args():
     parser.add_argument("--networks", nargs="*", default=DEFAULT_NETWORK_DIRS, help="要处理的网络目录名列表")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="轨迹图输出目录")
     parser.add_argument("--max-steps", type=int, default=MAX_STEPS, help="单回合最大步数")
+    parser.add_argument("--dry-run", action="store_true", help="只打印发现到的模型路径与元信息，不执行回放和绘图")
     return parser.parse_args()
 
 
@@ -307,7 +361,10 @@ def main():
     summary = {}
     for network_name in args.networks:
         print(f"[INFO] processing {network_name}")
-        summary[network_name] = redraw_network(network_name, args.output_dir, args.max_steps)
+        if args.dry_run:
+            summary[network_name] = dry_run_network(network_name)
+        else:
+            summary[network_name] = redraw_network(network_name, args.output_dir, args.max_steps)
     print("\n[SUMMARY]")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
