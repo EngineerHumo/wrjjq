@@ -1,98 +1,216 @@
 from __future__ import annotations
 
+import argparse
 import json
 from collections import OrderedDict
 from pathlib import Path
+from typing import Iterable, List, Optional, Tuple
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
-BASE_DIR = Path('')
-OUTPUT_PATH = Path('/home/wensheng/gjq_workspace/wrjjq/compare_metrics_summary.xlsx')
-
-METHOD_PATHS = OrderedDict(
-    {
-        'iddpg': lambda compare_dir, target: compare_dir / 'iddpg' / f'target_{target}' / 'results' / 'metrics_summary.json',
-        'maddpg_nopf': lambda compare_dir, target: compare_dir / 'maddpg_nopf' / f'target_{target}' / 'results' / 'metrics_summary.json',
-        'maddpg_our_method': lambda compare_dir, target: compare_dir / 'maddpg_our_method' / 'results' / f'target_{target}' / 'metrics_summary.json',
-    }
-)
-
-METRICS = [
-    'min_all_detect_step',
-    'total_detection_count',
-    'overlap_rate',
-    'collision_count',
-    'coverage_efficiency',
-]
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_OUTPUT_PATH = REPO_ROOT / 'compare_metrics_summary.xlsx'
+DEFAULT_COMPARE_METHODS = ('iddpg', 'maddpg_nopf', 'maddpg_our_method')
+DEFAULT_UAV_COUNTS = tuple(range(3, 9))
+DEFAULT_TARGET_COUNTS = tuple(range(1, 6))
+PRIMARY_METRICS = ('min_all_detect_step', 'total_detection_count', 'coverage_efficiency')
+METRIC_DIRECTIONS = {
+    'min_all_detect_step': 'min',
+    'total_detection_count': 'max',
+    'coverage_efficiency': 'max',
+}
 
 
-def pick_best_entry(summary: dict) -> tuple[str, dict]:
-    if 'rank_01' in summary:
-        return 'rank_01', summary['rank_01']
-
-    top_keys = [k for k in summary if k.startswith('top_ep_')]
-    if top_keys:
-        return top_keys[0], summary[top_keys[0]]
-
-    first_key = next(iter(summary))
-    return first_key, summary[first_key]
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='汇总三类网络在不同无人机/目标数量下的最佳模型指标到 Excel。')
+    parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT_PATH, help='Excel 输出路径')
+    parser.add_argument('--compare-methods', nargs='*', default=list(DEFAULT_COMPARE_METHODS), help='参与对比的方法名称')
+    parser.add_argument('--uav-counts', nargs='*', type=int, default=list(DEFAULT_UAV_COUNTS), help='无人机数量列表')
+    parser.add_argument('--target-counts', nargs='*', type=int, default=list(DEFAULT_TARGET_COUNTS), help='目标数量列表')
+    return parser.parse_args()
 
 
-def build_tables() -> tuple[dict[str, list[dict]], list[dict]]:
-    metric_tables: dict[str, list[dict]] = {metric: [] for metric in METRICS}
-    best_model_rows: list[dict] = []
+def _score_value(metric: str, value: float) -> float:
+    return -value if METRIC_DIRECTIONS[metric] == 'min' else value
 
-    for uav_count in range(3, 7):
-        compare_dir = BASE_DIR / f'newnet_6_{uav_count}_compare' / 'compare_results'
-        if not compare_dir.exists():
-            raise FileNotFoundError(f'缺少目录: {compare_dir}')
 
-        for target_count in range(1, 5):
-            group_key = f'UAV_{uav_count}_Target_{target_count}'
-            metric_row_map = {
-                metric: {
-                    'uav_count': uav_count,
-                    'target_count': target_count,
-                    'group': group_key,
+def _normalize_metric_value(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def load_json_dict(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    with path.open('r', encoding='utf-8') as f:
+        payload = json.load(f)
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_json_list(path: Path) -> list:
+    if not path.exists():
+        return []
+    with path.open('r', encoding='utf-8') as f:
+        payload = json.load(f)
+    return payload if isinstance(payload, list) else []
+
+
+def discover_metrics_file(network_dir: Path, method: str, target_count: int) -> Optional[Path]:
+    if method == 'iddpg':
+        candidate = network_dir / 'compare_results_100' / 'iddpg' / f'target_{target_count}' / 'results' / 'metrics_summary.json'
+    elif method == 'maddpg_nopf':
+        candidate = network_dir / 'compare_results_100' / 'maddpg_nopf' / f'target_{target_count}' / 'results' / 'metrics_summary.json'
+    elif method == 'maddpg_our_method':
+        candidate = network_dir / 'compare_results_100' / 'maddpg_our_method' / 'results' / f'target_{target_count}' / 'metrics_summary.json'
+    else:
+        raise KeyError(f'未配置方法: {method}')
+    return candidate if candidate.exists() else None
+
+
+def discover_candidate_keys(network_dir: Path, method: str, target_count: int) -> List[str]:
+    keys: List[str] = []
+    if method == 'maddpg_our_method':
+        summary_path = network_dir / 'compare_results_100' / 'maddpg_our_method' / 'models' / f'target_{target_count}' / 'top_models' / 'top_models_summary.json'
+        for rec in load_json_list(summary_path):
+            rank = rec.get('rank')
+            if isinstance(rank, int):
+                keys.append(f'rank_{rank:02d}')
+        if 'rank_01' not in keys:
+            keys.insert(0, 'rank_01')
+        return keys
+
+    if method == 'iddpg':
+        models_dir = network_dir / 'compare_results_100' / 'iddpg' / f'target_{target_count}' / 'models' / 'iddpg' / 'models'
+    elif method == 'maddpg_nopf':
+        models_dir = network_dir / 'compare_results_100' / 'maddpg_nopf' / f'target_{target_count}' / 'models' / 'maddpg_no_pf' / 'models'
+    else:
+        raise KeyError(f'未配置方法: {method}')
+
+    top_models_payload = load_json_dict(models_dir / 'top_models.json')
+    for rec in top_models_payload.get('top_models', []):
+        episode = rec.get('episode')
+        if isinstance(episode, int):
+            keys.append(f'top_ep_{episode}')
+
+    episode_4000_payload = load_json_dict(models_dir / 'episode_4000.json')
+    if episode_4000_payload:
+        keys.append('episode_4000')
+
+    return keys
+
+
+def pick_best_model(summary: dict, candidate_keys: Iterable[str]) -> Tuple[Optional[str], Optional[dict], str]:
+    available_keys = []
+    for key in candidate_keys:
+        metrics = summary.get(key)
+        if isinstance(metrics, dict):
+            available_keys.append(key)
+
+    if not available_keys:
+        return None, None, 'no_discovered_model_key_in_metrics_summary'
+
+    best_key: Optional[str] = None
+    best_metrics: Optional[dict] = None
+    best_rank: Optional[Tuple[float, float, float, str]] = None
+    for key in available_keys:
+        metrics = summary[key]
+        normalized = {
+            metric: _normalize_metric_value(metrics.get(metric))
+            for metric in PRIMARY_METRICS
+        }
+        if any(value is None for value in normalized.values()):
+            continue
+        rank = (
+            _score_value('min_all_detect_step', normalized['min_all_detect_step']),
+            _score_value('total_detection_count', normalized['total_detection_count']),
+            _score_value('coverage_efficiency', normalized['coverage_efficiency']),
+            key,
+        )
+        if best_rank is None or rank > best_rank:
+            best_rank = rank
+            best_key = key
+            best_metrics = normalized
+
+    if best_key is None:
+        return None, None, 'discovered_keys_missing_required_metrics'
+    return best_key, best_metrics, ''
+
+
+def build_summary_rows(compare_methods: Iterable[str], uav_counts: Iterable[int], target_counts: Iterable[int]) -> Tuple[List[dict], List[dict]]:
+    rows: List[dict] = []
+    missing_rows: List[dict] = []
+
+    for method in compare_methods:
+        for uav_count in uav_counts:
+            network_dir = REPO_ROOT / f'newnet_6_{uav_count}_compare'
+            for target_count in target_counts:
+                metrics_path = discover_metrics_file(network_dir, method, target_count)
+                candidate_keys = discover_candidate_keys(network_dir, method, target_count)
+                summary = load_json_dict(metrics_path) if metrics_path is not None else {}
+                best_key, best_metrics, missing_reason = pick_best_model(summary, candidate_keys)
+                row = {
+                    'network': network_dir.name,
+                    'method': method,
+                    'uav_count': int(uav_count),
+                    'target_count': int(target_count),
+                    'best_model_key': best_key or '',
+                    'candidate_model_keys': ', '.join(candidate_keys),
+                    'metrics_file': '' if metrics_path is None else str(metrics_path),
+                    'min_all_detect_step': '',
+                    'total_detection_count': '',
+                    'coverage_efficiency': '',
                 }
-                for metric in METRICS
+                if best_metrics is not None:
+                    for metric, value in best_metrics.items():
+                        row[metric] = value
+                else:
+                    if not missing_reason:
+                        missing_reason = 'metrics_summary_missing'
+                    missing_rows.append(
+                        {
+                            'network': network_dir.name,
+                            'method': method,
+                            'uav_count': int(uav_count),
+                            'target_count': int(target_count),
+                            'metrics_file': '' if metrics_path is None else str(metrics_path),
+                            'candidate_model_keys': ', '.join(candidate_keys),
+                            'reason': missing_reason,
+                        }
+                    )
+                rows.append(row)
+
+    rows.sort(key=lambda item: (item['method'], item['uav_count'], item['target_count']))
+    missing_rows.sort(key=lambda item: (item['method'], item['uav_count'], item['target_count']))
+    return rows, missing_rows
+
+
+def build_matrix_rows(rows: List[dict], metric: str, axis: str, axis_values: Iterable[int], compare_methods: Iterable[str], other_values: Iterable[int]) -> List[dict]:
+    row_map = {
+        (item['method'], item['uav_count'], item['target_count']): item
+        for item in rows
+    }
+    matrix_rows: List[dict] = []
+    for method in compare_methods:
+        for axis_value in axis_values:
+            output_row = {
+                'method': method,
+                axis: int(axis_value),
             }
-
-            for method, path_builder in METHOD_PATHS.items():
-                metrics_file = path_builder(compare_dir, target_count)
-                if not metrics_file.exists():
-                    raise FileNotFoundError(f'缺少指标文件: {metrics_file}')
-
-                with metrics_file.open('r', encoding='utf-8') as f:
-                    summary = json.load(f)
-
-                if not isinstance(summary, dict) or not summary:
-                    raise ValueError(f'指标文件为空或格式错误: {metrics_file}')
-
-                best_key, best_metrics = pick_best_entry(summary)
-                best_model_rows.append(
-                    {
-                        'uav_count': uav_count,
-                        'target_count': target_count,
-                        'method': method,
-                        'best_model_key': best_key,
-                        'source_file': str(metrics_file),
-                    }
-                )
-
-                for metric in METRICS:
-                    if metric not in best_metrics:
-                        raise KeyError(f'{metrics_file} 的最佳模型 {best_key} 缺少指标 {metric}')
-                    metric_row_map[metric][method] = best_metrics[metric]
-
-            for metric in METRICS:
-                metric_tables[metric].append(metric_row_map[metric])
-
-    for rows in metric_tables.values():
-        rows.sort(key=lambda x: (x['uav_count'], x['target_count']))
-    best_model_rows.sort(key=lambda x: (x['uav_count'], x['target_count'], x['method']))
-
-    return metric_tables, best_model_rows
+            for other_value in other_values:
+                if axis == 'uav_count':
+                    item = row_map.get((method, int(axis_value), int(other_value)))
+                    header = f'target_{int(other_value)}'
+                else:
+                    item = row_map.get((method, int(other_value), int(axis_value)))
+                    header = f'uav_{int(other_value)}'
+                value = '' if item is None else item.get(metric, '')
+                output_row[header] = value
+            matrix_rows.append(output_row)
+    return matrix_rows
 
 
 def col_name(index: int) -> str:
@@ -104,7 +222,7 @@ def col_name(index: int) -> str:
     return result
 
 
-def make_sheet_xml(headers: list[str], rows: list[dict]) -> str:
+def make_sheet_xml(headers: List[str], rows: List[dict]) -> str:
     lines = [
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
@@ -132,7 +250,7 @@ def make_sheet_xml(headers: list[str], rows: list[dict]) -> str:
     return '\n'.join(lines)
 
 
-def write_xlsx(sheets: OrderedDict[str, tuple[list[str], list[dict]]], output_path: Path) -> None:
+def write_xlsx(sheets: OrderedDict[str, Tuple[List[str], List[dict]]], output_path: Path) -> None:
     workbook_xml = [
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
         '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"',
@@ -176,32 +294,57 @@ def write_xlsx(sheets: OrderedDict[str, tuple[list[str], list[dict]]], output_pa
         '</Relationships>',
     ])
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(output_path, 'w', compression=ZIP_DEFLATED) as zf:
         zf.writestr('[Content_Types].xml', '\n'.join(content_types))
         zf.writestr('_rels/.rels', root_rels)
         zf.writestr('xl/workbook.xml', '\n'.join(workbook_xml))
         zf.writestr('xl/_rels/workbook.xml.rels', '\n'.join(workbook_rels))
-
-        for idx, (_name, (headers, rows)) in enumerate(sheets.items(), start=1):
-            zf.writestr(f'xl/worksheets/sheet{idx}.xml', make_sheet_xml(headers, rows))
+        for idx, (_name, (headers, sheet_rows)) in enumerate(sheets.items(), start=1):
+            zf.writestr(f'xl/worksheets/sheet{idx}.xml', make_sheet_xml(headers, sheet_rows))
 
 
 def main() -> None:
-    metric_tables, best_models = build_tables()
+    args = parse_args()
+    compare_methods = tuple(args.compare_methods)
+    uav_counts = tuple(args.uav_counts)
+    target_counts = tuple(args.target_counts)
+    rows, missing_rows = build_summary_rows(compare_methods, uav_counts, target_counts)
 
-    sheets: OrderedDict[str, tuple[list[str], list[dict]]] = OrderedDict()
-    metric_headers = ['uav_count', 'target_count', 'group', 'iddpg', 'maddpg_nopf', 'maddpg_our_method']
-    for metric in METRICS:
-        sheets[metric[:31]] = (metric_headers, metric_tables[metric])
+    sheets: OrderedDict[str, Tuple[List[str], List[dict]]] = OrderedDict()
+    summary_headers = [
+        'network',
+        'method',
+        'uav_count',
+        'target_count',
+        'best_model_key',
+        'min_all_detect_step',
+        'total_detection_count',
+        'coverage_efficiency',
+        'candidate_model_keys',
+        'metrics_file',
+    ]
+    sheets['best_model_summary'] = (summary_headers, rows)
 
-    best_headers = ['uav_count', 'target_count', 'method', 'best_model_key', 'source_file']
-    sheets['best_model_keys'] = (best_headers, best_models)
+    for metric in PRIMARY_METRICS:
+        uav_headers = ['method', 'uav_count'] + [f'target_{target}' for target in target_counts]
+        target_headers = ['method', 'target_count'] + [f'uav_{uav}' for uav in uav_counts]
+        sheets[f'{metric[:18]}_by_uav'] = (
+            uav_headers,
+            build_matrix_rows(rows, metric, 'uav_count', uav_counts, compare_methods, target_counts),
+        )
+        sheets[f'{metric[:15]}_by_tar'] = (
+            target_headers,
+            build_matrix_rows(rows, metric, 'target_count', target_counts, compare_methods, uav_counts),
+        )
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    write_xlsx(sheets, OUTPUT_PATH)
+    missing_headers = ['network', 'method', 'uav_count', 'target_count', 'candidate_model_keys', 'metrics_file', 'reason']
+    sheets['missing_entries'] = (missing_headers, missing_rows)
 
-    print(f'已生成 Excel: {OUTPUT_PATH}')
-    print('共处理对比组数量:', len(best_models) // len(METHOD_PATHS))
+    write_xlsx(sheets, args.output)
+    print(f'已生成 Excel: {args.output}')
+    print(f'总组合数: {len(rows)}')
+    print(f'缺失组合数: {len(missing_rows)}')
 
 
 if __name__ == '__main__':
