@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +16,104 @@ COMPARE_DIRS = [f"newnet_6_{idx}_compare" for idx in range(3, 9)]
 DEFAULT_NETWORK_DIRS = STANDARD_DIRS + COMPARE_DIRS
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "redrawn_trajectories"
 MAX_STEPS = 200
+
+
+def _to_float_pair(point) -> List[float]:
+    return [float(point[0]), float(point[1])]
+
+
+def _serialize_trajectory_list(trajectories) -> List[List[List[float]]]:
+    return [[_to_float_pair(point) for point in traj] for traj in trajectories]
+
+
+def _serialize_obstacles(obstacles) -> List[Dict[str, float]]:
+    return [
+        {"x": float(ox), "y": float(oy), "radius": float(radius)}
+        for ox, oy, radius in (obstacles or [])
+    ]
+
+
+def _collect_target_detection_snapshot(env, config) -> List[Dict[str, object]]:
+    snapshot = []
+    detected_by = list(getattr(env, "target_detected_by", []) or [])
+    for target_idx, target in enumerate(getattr(env, "targets", [])):
+        item = {
+            "target_id": int(target_idx),
+            "target_position": [float(target.x), float(target.y)],
+            "detected": False,
+            "assigned_uav_id": None,
+            "detecting_uav_ids": [],
+            "distances": [],
+        }
+        if target_idx < len(detected_by) and detected_by[target_idx] is not None:
+            item["assigned_uav_id"] = int(detected_by[target_idx])
+        for agent in getattr(env, "agents", []):
+            distance = math.sqrt((agent["x"] - target.x) ** 2 + (agent["y"] - target.y) ** 2)
+            entry = {
+                "uav_id": int(agent["id"]),
+                "distance": float(distance),
+                "detected": bool(distance <= config.SENSOR_RANGE),
+            }
+            item["distances"].append(entry)
+            if entry["detected"]:
+                item["detected"] = True
+                item["detecting_uav_ids"].append(int(agent["id"]))
+        snapshot.append(item)
+    return snapshot
+
+
+def _build_episode_trace_payload(env, config, model: ModelEntry, seed_idx: int, seed: int, stop_step: int, max_steps: int, step_records):
+    initial_uav_positions = [
+        {"uav_id": int(agent["id"]), "position": _to_float_pair(traj[0])}
+        for agent, traj in zip(env.agents, env.uav_trajectories)
+    ]
+    initial_target_positions = [
+        {"target_id": int(target_idx), "position": _to_float_pair(traj[0])}
+        for target_idx, traj in enumerate(env.target_trajectories)
+    ]
+    detection_start_events = []
+    detection_first_step_by_target = {}
+    for step_record in step_records:
+        for target_info in step_record["targets"]:
+            if not target_info["detected"]:
+                continue
+            target_id = int(target_info["target_id"])
+            if target_id in detection_first_step_by_target:
+                continue
+            detection_first_step_by_target[target_id] = int(step_record["step"])
+            detection_start_events.append(
+                {
+                    "target_id": target_id,
+                    "first_detect_step": int(step_record["step"]),
+                    "assigned_uav_id": target_info["assigned_uav_id"],
+                    "detecting_uav_ids": list(target_info["detecting_uav_ids"]),
+                    "target_position": list(target_info["target_position"]),
+                }
+            )
+
+    return {
+        "image_file_name": make_output_name(model, seed_idx, seed),
+        "network_dir": model.network_dir,
+        "model_name": model.model_name,
+        "model_path": str(model.model_path),
+        "family": model.family,
+        "n_uav": int(model.n_uav),
+        "n_target": int(model.n_target),
+        "seed_index": int(seed_idx),
+        "seed": int(seed),
+        "max_steps": int(max_steps),
+        "stop_step": int(stop_step),
+        "map_size": float(config.MAP_SIZE),
+        "sensor_range": float(config.SENSOR_RANGE),
+        "obstacles": _serialize_obstacles(getattr(env, "obstacles", [])),
+        "initial_uav_positions": initial_uav_positions,
+        "initial_target_positions": initial_target_positions,
+        "uav_trajectories": _serialize_trajectory_list(getattr(env, "uav_trajectories", [])),
+        "target_trajectories": _serialize_trajectory_list(getattr(env, "target_trajectories", [])),
+        "detection_points": [_to_float_pair(point) for point in getattr(env, "detection_points", [])],
+        "detection_start_events": detection_start_events,
+        "step_records": step_records,
+    }
 
 
 def parse_n_uav_from_network_name(network_name: str) -> int:
@@ -140,11 +241,29 @@ def run_until_all_targets_detected(env, select_actions: Callable, seed: int, max
     obs_n, _ = env.reset(seed=seed)
     target_seen_once = np.zeros(env.n_targets, dtype=bool)
     stop_step = max_steps
+    step_records = []
     for step in range(max_steps):
         actions = select_actions(obs_n)
         next_obs_n, _, terminated, truncated, _ = env.step(actions)
         detected_by = getattr(env, "target_detected_by", None) or []
         detected_mask = np.array([agent_idx is not None for agent_idx in detected_by], dtype=bool)
+        step_records.append(
+            {
+                "step": int(step + 1),
+                "uavs": [
+                    {
+                        "uav_id": int(agent["id"]),
+                        "position": [float(agent["x"]), float(agent["y"])],
+                        "speed": float(agent["v"]),
+                        "heading": float(agent["phi"]),
+                    }
+                    for agent in getattr(env, "agents", [])
+                ],
+                "targets": _collect_target_detection_snapshot(env, env.config_for_redraw),
+                "detection_points_count": int(len(getattr(env, "detection_points", []))),
+                "last_detection": bool(getattr(env, "last_detection", False)),
+            }
+        )
         if detected_mask.size:
             target_seen_once[: detected_mask.size] = np.logical_or(target_seen_once[: detected_mask.size], detected_mask)
         obs_n = next_obs_n
@@ -154,7 +273,12 @@ def run_until_all_targets_detected(env, select_actions: Callable, seed: int, max
         if any(terminated) or any(truncated):
             stop_step = step + 1
             break
-    return stop_step
+    return stop_step, step_records
+
+
+def save_episode_trace_json(json_path: Path, payload: Dict[str, object]):
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def collect_standard_models(network_dir: Path) -> List[ModelEntry]:
@@ -286,7 +410,8 @@ def build_standard_policy(network_dir: Path, model: ModelEntry):
     act_dim = env.action_space.shape[0]
     maddpg = algo_mod.MADDPG(env.n_agents, obs_dim, act_dim, obs_dim * env.n_agents)
     maddpg.load_models(str(model.model_path))
-    return env, lambda obs_n: maddpg.select_actions(obs_n, noise_std=0.0), env_mod.Config.MAP_SIZE
+    env.config_for_redraw = env_mod.Config
+    return env, lambda obs_n: maddpg.select_actions(obs_n, noise_std=0.0), env_mod.Config.MAP_SIZE, env_mod.Config
 
 
 def build_compare_policy(network_dir: Path, model: ModelEntry):
@@ -299,12 +424,14 @@ def build_compare_policy(network_dir: Path, model: ModelEntry):
         algo_mod = load_module(network_dir, "iddpg.py", f"iddpg_{network_dir.name}")
         policy = algo_mod.IDDPG(env.n_agents, obs_dim, act_dim)
         policy.load(str(model.model_path))
-        return env, lambda obs_n: policy.select_actions(obs_n, noise_std=0.0), env_mod.Config.MAP_SIZE
+        env.config_for_redraw = env_mod.Config
+        return env, lambda obs_n: policy.select_actions(obs_n, noise_std=0.0), env_mod.Config.MAP_SIZE, env_mod.Config
 
     algo_mod = load_module(network_dir, "maddpg.py", f"maddpg_{network_dir.name}")
     maddpg = algo_mod.MADDPG(env.n_agents, obs_dim, act_dim, obs_dim * env.n_agents)
     maddpg.load_models(str(model.model_path))
-    return env, lambda obs_n: maddpg.select_actions(obs_n, noise_std=0.0), env_mod.Config.MAP_SIZE
+    env.config_for_redraw = env_mod.Config
+    return env, lambda obs_n: maddpg.select_actions(obs_n, noise_std=0.0), env_mod.Config.MAP_SIZE, env_mod.Config
 
 
 def collect_models(network_name: str) -> List[ModelEntry]:
@@ -412,7 +539,7 @@ def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict
             continue
 
         try:
-            env, select_actions, map_size = build_runner(model)
+            env, select_actions, map_size, config = build_runner(model)
         except Exception as exc:
             skipped += len(seeds)
             errors.append({
@@ -427,7 +554,7 @@ def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict
 
         for seed_idx, seed in enumerate(seeds, start=1):
             try:
-                stop_step = run_until_all_targets_detected(env, select_actions, seed, max_steps)
+                stop_step, step_records = run_until_all_targets_detected(env, select_actions, seed, max_steps)
                 title = f"{model.network_dir} | {model.model_name} | UAV={model.n_uav} | Target={model.n_target} | Seed#{seed_idx}={seed} | stop={stop_step}"
                 out_dir = output_root / network_name / f"uav_{model.n_uav}" / f"target_{model.n_target}" / model.model_name
                 out_path = out_dir / make_output_name(model, seed_idx, seed)
@@ -439,6 +566,11 @@ def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict
                     env.detection_points,
                     out_path,
                     title,
+                )
+                json_path = out_path.with_suffix(".json")
+                save_episode_trace_json(
+                    json_path,
+                    _build_episode_trace_payload(env, config, model, seed_idx, seed, stop_step, max_steps, step_records),
                 )
                 saved += 1
             except Exception as exc:
