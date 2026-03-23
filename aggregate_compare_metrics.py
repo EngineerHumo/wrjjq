@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
+
+from redraw_saved_trajectories import ModelEntry, collect_models
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_PATH = REPO_ROOT / 'compare_metrics_summary.xlsx'
@@ -51,15 +54,18 @@ def load_json_dict(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def load_json_list(path: Path) -> list:
-    if not path.exists():
-        return []
-    with path.open('r', encoding='utf-8') as f:
-        payload = json.load(f)
-    return payload if isinstance(payload, list) else []
+def normalize_method_name(model: ModelEntry) -> Optional[str]:
+    if model.model_name.startswith('iddpg'):
+        return 'iddpg'
+    if model.model_name.startswith('maddpg_nopf'):
+        return 'maddpg_nopf'
+    if model.model_name.startswith('maddpg_pf'):
+        return 'maddpg_our_method'
+    return None
 
 
-def discover_metrics_file(network_dir: Path, method: str, target_count: int) -> Optional[Path]:
+def discover_metrics_file(network_name: str, method: str, target_count: int) -> Optional[Path]:
+    network_dir = REPO_ROOT / network_name
     if method == 'iddpg':
         candidate = network_dir / 'compare_results_100' / 'iddpg' / f'target_{target_count}' / 'results' / 'metrics_summary.json'
     elif method == 'maddpg_nopf':
@@ -71,47 +77,64 @@ def discover_metrics_file(network_dir: Path, method: str, target_count: int) -> 
     return candidate if candidate.exists() else None
 
 
-def discover_candidate_keys(network_dir: Path, method: str, target_count: int) -> List[str]:
+def infer_metric_keys_from_model(model: ModelEntry) -> List[str]:
     keys: List[str] = []
-    if method == 'maddpg_our_method':
-        summary_path = network_dir / 'compare_results_100' / 'maddpg_our_method' / 'models' / f'target_{target_count}' / 'top_models' / 'top_models_summary.json'
-        for rec in load_json_list(summary_path):
-            rank = rec.get('rank')
-            if isinstance(rank, int):
-                keys.append(f'rank_{rank:02d}')
-        if 'rank_01' not in keys:
-            keys.insert(0, 'rank_01')
-        return keys
+    text_candidates = [model.model_name, model.model_path.name, model.model_path.as_posix()]
 
-    if method == 'iddpg':
-        models_dir = network_dir / 'compare_results_100' / 'iddpg' / f'target_{target_count}' / 'models' / 'iddpg' / 'models'
-    elif method == 'maddpg_nopf':
-        models_dir = network_dir / 'compare_results_100' / 'maddpg_nopf' / f'target_{target_count}' / 'models' / 'maddpg_no_pf' / 'models'
-    else:
-        raise KeyError(f'未配置方法: {method}')
+    for text in text_candidates:
+        rank_match = re.search(r'rank[_-]?0*(\d+)', text)
+        if rank_match:
+            keys.append(f'rank_{int(rank_match.group(1)):02d}')
 
-    top_models_payload = load_json_dict(models_dir / 'top_models.json')
-    for rec in top_models_payload.get('top_models', []):
-        episode = rec.get('episode')
-        if isinstance(episode, int):
+        top_ep_match = re.search(r'top\d+_ep[_-]?(\d+)', text)
+        if top_ep_match:
+            keys.append(f'top_ep_{int(top_ep_match.group(1))}')
+
+        episode_match = re.search(r'episode[_-]?(\d+)', text)
+        if episode_match:
+            episode = int(episode_match.group(1))
+            keys.append(f'episode_{episode}')
             keys.append(f'top_ep_{episode}')
 
-    episode_4000_payload = load_json_dict(models_dir / 'episode_4000.json')
-    if episode_4000_payload:
-        keys.append('episode_4000')
+        rank_ep_match = re.search(r'rank[_-]?0*(\d+)_ep[_-]?(\d+)', text)
+        if rank_ep_match:
+            keys.append(f'rank_{int(rank_ep_match.group(1)):02d}')
+            keys.append(f'top_ep_{int(rank_ep_match.group(2))}')
 
-    return keys
+    unique_keys: List[str] = []
+    seen = set()
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            unique_keys.append(key)
+    return unique_keys
 
 
-def pick_best_model(summary: dict, candidate_keys: Iterable[str]) -> Tuple[Optional[str], Optional[dict], str]:
-    available_keys = []
-    for key in candidate_keys:
-        metrics = summary.get(key)
-        if isinstance(metrics, dict):
-            available_keys.append(key)
+def discover_models_by_group(network_name: str, compare_methods: Iterable[str], target_counts: Iterable[int]) -> dict[tuple[str, int], List[ModelEntry]]:
+    grouped: dict[tuple[str, int], List[ModelEntry]] = {}
+    method_set = set(compare_methods)
+    target_set = set(target_counts)
+    for model in collect_models(network_name):
+        method = normalize_method_name(model)
+        if method is None or method not in method_set or model.n_target not in target_set:
+            continue
+        grouped.setdefault((method, model.n_target), []).append(model)
+    return grouped
 
+
+def pick_best_model(summary: dict, models: Iterable[ModelEntry]) -> Tuple[Optional[str], Optional[dict], List[str], str]:
+    candidate_keys: List[str] = []
+    key_to_models: dict[str, List[ModelEntry]] = {}
+    for model in models:
+        model_keys = infer_metric_keys_from_model(model)
+        for key in model_keys:
+            if key not in candidate_keys:
+                candidate_keys.append(key)
+            key_to_models.setdefault(key, []).append(model)
+
+    available_keys = [key for key in candidate_keys if isinstance(summary.get(key), dict)]
     if not available_keys:
-        return None, None, 'no_discovered_model_key_in_metrics_summary'
+        return None, None, candidate_keys, 'no_collect_models_candidate_key_in_metrics_summary'
 
     best_key: Optional[str] = None
     best_metrics: Optional[dict] = None
@@ -136,27 +159,31 @@ def pick_best_model(summary: dict, candidate_keys: Iterable[str]) -> Tuple[Optio
             best_metrics = normalized
 
     if best_key is None:
-        return None, None, 'discovered_keys_missing_required_metrics'
-    return best_key, best_metrics, ''
+        return None, None, candidate_keys, 'collect_models_candidates_missing_required_metrics'
+    return best_key, best_metrics, candidate_keys, ''
 
 
 def build_summary_rows(compare_methods: Iterable[str], uav_counts: Iterable[int], target_counts: Iterable[int]) -> Tuple[List[dict], List[dict]]:
     rows: List[dict] = []
     missing_rows: List[dict] = []
 
-    for method in compare_methods:
-        for uav_count in uav_counts:
-            network_dir = REPO_ROOT / f'newnet_6_{uav_count}_compare'
+    compare_methods = tuple(compare_methods)
+    target_counts = tuple(target_counts)
+    for uav_count in uav_counts:
+        network_name = f'newnet_6_{uav_count}_compare'
+        models_by_group = discover_models_by_group(network_name, compare_methods, target_counts)
+        for method in compare_methods:
             for target_count in target_counts:
-                metrics_path = discover_metrics_file(network_dir, method, target_count)
-                candidate_keys = discover_candidate_keys(network_dir, method, target_count)
+                metrics_path = discover_metrics_file(network_name, method, target_count)
                 summary = load_json_dict(metrics_path) if metrics_path is not None else {}
-                best_key, best_metrics, missing_reason = pick_best_model(summary, candidate_keys)
+                models = models_by_group.get((method, target_count), [])
+                best_key, best_metrics, candidate_keys, missing_reason = pick_best_model(summary, models)
                 row = {
-                    'network': network_dir.name,
+                    'network': network_name,
                     'method': method,
                     'uav_count': int(uav_count),
                     'target_count': int(target_count),
+                    'discovered_model_count': int(len(models)),
                     'best_model_key': best_key or '',
                     'candidate_model_keys': ', '.join(candidate_keys),
                     'metrics_file': '' if metrics_path is None else str(metrics_path),
@@ -172,12 +199,13 @@ def build_summary_rows(compare_methods: Iterable[str], uav_counts: Iterable[int]
                         missing_reason = 'metrics_summary_missing'
                     missing_rows.append(
                         {
-                            'network': network_dir.name,
+                            'network': network_name,
                             'method': method,
                             'uav_count': int(uav_count),
                             'target_count': int(target_count),
-                            'metrics_file': '' if metrics_path is None else str(metrics_path),
+                            'discovered_model_count': int(len(models)),
                             'candidate_model_keys': ', '.join(candidate_keys),
+                            'metrics_file': '' if metrics_path is None else str(metrics_path),
                             'reason': missing_reason,
                         }
                     )
@@ -317,6 +345,7 @@ def main() -> None:
         'method',
         'uav_count',
         'target_count',
+        'discovered_model_count',
         'best_model_key',
         'min_all_detect_step',
         'total_detection_count',
@@ -338,7 +367,7 @@ def main() -> None:
             build_matrix_rows(rows, metric, 'target_count', target_counts, compare_methods, uav_counts),
         )
 
-    missing_headers = ['network', 'method', 'uav_count', 'target_count', 'candidate_model_keys', 'metrics_file', 'reason']
+    missing_headers = ['network', 'method', 'uav_count', 'target_count', 'discovered_model_count', 'candidate_model_keys', 'metrics_file', 'reason']
     sheets['missing_entries'] = (missing_headers, missing_rows)
 
     write_xlsx(sheets, args.output)
