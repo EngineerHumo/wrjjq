@@ -23,7 +23,7 @@ RESULT_DIR = "./results"
 LOG_FILE = os.path.join(RESULT_DIR, "training_log.txt")
 TOP_K_MODELS = 10
 EVAL_SEEDS = get_eval_seeds()
-TARGET_TRAINING_SEQUENCE = [2, 3, 4, 5]
+TARGET_TRAINING_SEQUENCE = [4,5]
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
