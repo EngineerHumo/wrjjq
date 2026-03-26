@@ -73,6 +73,7 @@ def _build_episode_trace_payload(env, config, model: ModelEntry, seed_idx: int, 
     ]
     detection_start_events = []
     detection_first_step_by_target = {}
+    detection_targets_by_step = {}
     for step_record in step_records:
         for target_info in step_record["targets"]:
             if not target_info["detected"]:
@@ -85,11 +86,13 @@ def _build_episode_trace_payload(env, config, model: ModelEntry, seed_idx: int, 
                 {
                     "target_id": target_id,
                     "first_detect_step": int(step_record["step"]),
+                    "first_detect_time_step": int(step_record["step"]),
                     "assigned_uav_id": target_info["assigned_uav_id"],
                     "detecting_uav_ids": list(target_info["detecting_uav_ids"]),
                     "target_position": list(target_info["target_position"]),
                 }
             )
+            detection_targets_by_step.setdefault(int(step_record["step"]), []).append(target_id)
 
     return {
         "image_file_name": make_output_name(model, seed_idx, seed),
@@ -112,6 +115,10 @@ def _build_episode_trace_payload(env, config, model: ModelEntry, seed_idx: int, 
         "target_trajectories": _serialize_trajectory_list(getattr(env, "target_trajectories", [])),
         "detection_points": [_to_float_pair(point) for point in getattr(env, "detection_points", [])],
         "detection_start_events": detection_start_events,
+        "detection_targets_by_step": [
+            {"step": int(step), "target_ids": [int(target_id) for target_id in sorted(target_ids)]}
+            for step, target_ids in sorted(detection_targets_by_step.items())
+        ],
         "step_records": step_records,
     }
 
@@ -261,6 +268,7 @@ def run_until_all_targets_detected(env, select_actions: Callable, seed: int, max
                 ],
                 "targets": _collect_target_detection_snapshot(env, env.config_for_redraw),
                 "detection_points_count": int(len(getattr(env, "detection_points", []))),
+                "detection_points": [_to_float_pair(point) for point in getattr(env, "detection_points", [])],
                 "last_detection": bool(getattr(env, "last_detection", False)),
             }
         )
@@ -516,7 +524,7 @@ def dry_run_network(network_name: str) -> Dict[str, object]:
     }
 
 
-def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict[str, object]:
+def redraw_network(network_name: str, output_root: Path, max_steps: int, draw_images: bool = False) -> Dict[str, object]:
     network_dir = REPO_ROOT / network_name
     seeds = get_eval_seeds(network_dir)
     models = collect_models(network_name)
@@ -539,7 +547,7 @@ def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict
             continue
 
         try:
-            env, select_actions, map_size, config = build_runner(model)
+            env, select_actions, _map_size, config = build_runner(model)
         except Exception as exc:
             skipped += len(seeds)
             errors.append({
@@ -555,18 +563,19 @@ def redraw_network(network_name: str, output_root: Path, max_steps: int) -> Dict
         for seed_idx, seed in enumerate(seeds, start=1):
             try:
                 stop_step, step_records = run_until_all_targets_detected(env, select_actions, seed, max_steps)
-                title = f"{model.network_dir} | {model.model_name} | UAV={model.n_uav} | Target={model.n_target} | Seed#{seed_idx}={seed} | stop={stop_step}"
                 out_dir = output_root / network_name / f"uav_{model.n_uav}" / f"target_{model.n_target}" / model.model_name
                 out_path = out_dir / make_output_name(model, seed_idx, seed)
-                plot_trajectories(
-                    map_size,
-                    env.obstacles,
-                    env.uav_trajectories,
-                    env.target_trajectories,
-                    env.detection_points,
-                    out_path,
-                    title,
-                )
+                if draw_images:
+                    title = f"{model.network_dir} | {model.model_name} | UAV={model.n_uav} | Target={model.n_target} | Seed#{seed_idx}={seed} | stop={stop_step}"
+                    plot_trajectories(
+                        float(config.MAP_SIZE),
+                        env.obstacles,
+                        env.uav_trajectories,
+                        env.target_trajectories,
+                        env.detection_points,
+                        out_path,
+                        title,
+                    )
                 json_path = out_path.with_suffix(".json")
                 save_episode_trace_json(
                     json_path,
@@ -597,6 +606,7 @@ def parse_args():
     parser.add_argument("--networks", nargs="*", default=DEFAULT_NETWORK_DIRS, help="要处理的网络目录名列表")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="轨迹图输出目录")
     parser.add_argument("--max-steps", type=int, default=MAX_STEPS, help="单回合最大步数")
+    parser.add_argument("--draw-images", action="store_true", help="默认仅保存 JSON；设置该参数后会额外绘制 PNG 图像")
     parser.add_argument("--dry-run", action="store_true", help="只打印发现到的模型路径与元信息，不执行回放和绘图")
     return parser.parse_args()
 
@@ -609,7 +619,7 @@ def main():
         if args.dry_run:
             summary[network_name] = dry_run_network(network_name)
         else:
-            summary[network_name] = redraw_network(network_name, args.output_dir, args.max_steps)
+            summary[network_name] = redraw_network(network_name, args.output_dir, args.max_steps, draw_images=args.draw_images)
     print("\n[SUMMARY]")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
