@@ -177,7 +177,11 @@ def _metadata_candidate_paths(network_name: str, method: str, target_count: int)
             paths.extend([models_dir / 'top_models.json', models_dir / 'episode_4000.json'])
     elif method == 'maddpg_our_method':
         models_dir = network_dir / 'compare_results_100' / 'maddpg_our_method' / 'models' / f'target_{target_count}'
-        paths.extend([models_dir / 'top_models.json', models_dir / 'episode_4000.json'])
+        paths.extend([
+            models_dir / 'top_models.json',
+            models_dir / 'episode_4000.json',
+            models_dir / 'top_models' / 'top_models_summary.json',
+        ])
     else:
         return []
     return _deduplicate_keep_order(paths)
@@ -189,6 +193,22 @@ def discover_candidate_keys(network_name: str, method: str, target_count: int, s
         keys.extend(infer_metric_keys_from_model(model))
 
     for metadata_path in _metadata_candidate_paths(network_name, method, target_count):
+        if metadata_path.name == 'top_models_summary.json' and metadata_path.exists():
+            try:
+                payload_list = json.loads(metadata_path.read_text(encoding='utf-8'))
+            except (json.JSONDecodeError, OSError):
+                payload_list = []
+            if isinstance(payload_list, list):
+                for item in payload_list:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get('rank') is not None:
+                        keys.append(f"rank_{int(item['rank']):02d}")
+                    if item.get('episode') is not None:
+                        episode = int(item['episode'])
+                        keys.extend([f'top_ep_{episode}', f'episode_{episode}'])
+            continue
+
         payload = load_json_dict(metadata_path)
         for item in payload.get('top_models', []):
             if isinstance(item, dict):
@@ -289,13 +309,14 @@ def build_summary_rows(compare_methods: Iterable[str], uav_counts: Iterable[int]
                 else:
                     if not missing_reason:
                         missing_reason = 'metrics_summary_missing'
+                    discovered_count = int(max(len(models), len(candidate_keys)))
                     missing_rows.append(
                         {
                             'network': network_name,
                             'method': method,
                             'uav_count': int(uav_count),
                             'target_count': int(target_count),
-                            'discovered_model_count': int(len(models)),
+                            'discovered_model_count': discovered_count,
                             'candidate_model_keys': ', '.join(candidate_keys),
                             'metrics_file': '' if metrics_path is None else str(metrics_path),
                             'reason': missing_reason,
