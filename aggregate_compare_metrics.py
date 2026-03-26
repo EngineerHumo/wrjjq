@@ -78,7 +78,10 @@ def discover_metrics_file(network_name: str, method: str, target_count: int) -> 
             candidates.append(network_dir / root / 'maddpg_our_method' / 'results' / f'target_{target_count}' / 'metrics_summary.json')
     else:
         raise KeyError(f'未配置方法: {method}')
-    dynamic_pattern = f'compare_results*/{method}/target_{target_count}/results/metrics_summary.json'
+    if method == 'maddpg_our_method':
+        dynamic_pattern = f'compare_results*/{method}/results/target_{target_count}/metrics_summary.json'
+    else:
+        dynamic_pattern = f'compare_results*/{method}/target_{target_count}/results/metrics_summary.json'
     candidates.extend(sorted(network_dir.glob(dynamic_pattern)))
     for candidate in candidates:
         if candidate.exists():
