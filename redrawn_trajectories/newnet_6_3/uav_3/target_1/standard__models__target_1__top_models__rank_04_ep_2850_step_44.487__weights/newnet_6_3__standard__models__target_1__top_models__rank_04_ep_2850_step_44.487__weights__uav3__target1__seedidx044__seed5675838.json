@@ -1,0 +1,390 @@
+{
+  "image_file_name": "newnet_6_3__standard__models__target_1__top_models__rank_04_ep_2850_step_44.487__weights__uav3__target1__seedidx044__seed5675838.png",
+  "network_dir": "newnet_6_3",
+  "model_name": "standard__models__target_1__top_models__rank_04_ep_2850_step_44.487__weights",
+  "model_path": "/home/wensheng/gjq_workspace/wrjjq/newnet_6_3/models/target_1/top_models/rank_04_ep_2850_step_44.487/weights",
+  "family": "standard",
+  "n_uav": 3,
+  "n_target": 1,
+  "seed_index": 44,
+  "seed": 5675838,
+  "max_steps": 200,
+  "stop_step": 3,
+  "map_size": 1200.0,
+  "sensor_range": 150.0,
+  "obstacles": [
+    {
+      "x": 904.5943222488249,
+      "y": 375.3081186357019,
+      "radius": 53.49285108578657
+    },
+    {
+      "x": 210.37201736836568,
+      "y": 488.16144836676915,
+      "radius": 42.196724096888346
+    },
+    {
+      "x": 388.2581856799186,
+      "y": 275.42111870092253,
+      "radius": 49.84033826242777
+    },
+    {
+      "x": 969.5252168239691,
+      "y": 980.5461820451495,
+      "radius": 47.66646862543335
+    },
+    {
+      "x": 241.25347200248868,
+      "y": 698.3358781562864,
+      "radius": 49.223253616217924
+    }
+  ],
+  "initial_uav_positions": [
+    {
+      "uav_id": 0,
+      "position": [
+        97.6959248196654,
+        88.03898674537098
+      ]
+    },
+    {
+      "uav_id": 1,
+      "position": [
+        19.516118629249245,
+        88.11259893544904
+      ]
+    },
+    {
+      "uav_id": 2,
+      "position": [
+        84.9981500433181,
+        86.25069694588548
+      ]
+    }
+  ],
+  "initial_target_positions": [
+    {
+      "target_id": 0,
+      "position": [
+        133.9054683700058,
+        297.1478100386376
+      ]
+    }
+  ],
+  "uav_trajectories": [
+    [
+      [
+        97.6959248196654,
+        88.03898674537098
+      ],
+      [
+        110.82156705989733,
+        95.29966900262079
+      ],
+      [
+        126.8919601146097,
+        107.20523304411515
+      ],
+      [
+        149.327580026723,
+        118.23441906385496
+      ]
+    ],
+    [
+      [
+        19.516118629249245,
+        88.11259893544904
+      ],
+      [
+        19.413922903957,
+        103.11061133539098
+      ],
+      [
+        30.479331584889927,
+        119.76350835942736
+      ],
+      [
+        47.296163270523394,
+        138.24909032637106
+      ]
+    ],
+    [
+      [
+        84.9981500433181,
+        86.25069694588548
+      ],
+      [
+        91.252991074179,
+        99.88343136175672
+      ],
+      [
+        95.85395286084494,
+        119.34593742821674
+      ],
+      [
+        100.18868962628379,
+        143.96571237742933
+      ]
+    ]
+  ],
+  "target_trajectories": [
+    [
+      [
+        133.9054683700058,
+        297.1478100386376
+      ],
+      [
+        139.33469364065428,
+        285.257231293349
+      ],
+      [
+        141.84726582952672,
+        272.79652361201505
+      ],
+      [
+        141.0156572148575,
+        260.1149924938252
+      ]
+    ]
+  ],
+  "detection_points": [
+    [
+      149.327580026723,
+      118.23441906385496
+    ],
+    [
+      100.18868962628379,
+      143.96571237742933
+    ]
+  ],
+  "detection_start_events": [
+    {
+      "target_id": 0,
+      "first_detect_step": 3,
+      "first_detect_time_step": 3,
+      "assigned_uav_id": 2,
+      "detecting_uav_ids": [
+        0,
+        2
+      ],
+      "target_position": [
+        141.0156572148575,
+        260.1149924938252
+      ]
+    }
+  ],
+  "detection_targets_by_step": [
+    {
+      "step": 3,
+      "target_ids": [
+        0
+      ]
+    }
+  ],
+  "step_records": [
+    {
+      "step": 1,
+      "uavs": [
+        {
+          "uav_id": 0,
+          "position": [
+            110.82156705989733,
+            95.29966900262079
+          ],
+          "speed": 14.999999701976776,
+          "heading": 0.5052720269160655
+        },
+        {
+          "uav_id": 1,
+          "position": [
+            19.413922903957,
+            103.11061133539098
+          ],
+          "speed": 14.998360574245453,
+          "heading": 1.5776101725875469
+        },
+        {
+          "uav_id": 2,
+          "position": [
+            91.252991074179,
+            99.88343136175672
+          ],
+          "speed": 14.999149441719055,
+          "heading": 1.1406398291558908
+        }
+      ],
+      "targets": [
+        {
+          "target_id": 0,
+          "target_position": [
+            139.33469364065428,
+            285.257231293349
+          ],
+          "detected": false,
+          "assigned_uav_id": null,
+          "detecting_uav_ids": [],
+          "distances": [
+            {
+              "uav_id": 0,
+              "distance": 192.08558993023436,
+              "detected": false
+            },
+            {
+              "uav_id": 1,
+              "distance": 218.0788444948118,
+              "detected": false
+            },
+            {
+              "uav_id": 2,
+              "distance": 191.50795237474864,
+              "detected": false
+            }
+          ]
+        }
+      ],
+      "detection_points_count": 0,
+      "detection_points": [],
+      "last_detection": false
+    },
+    {
+      "step": 2,
+      "uavs": [
+        {
+          "uav_id": 0,
+          "position": [
+            126.8919601146097,
+            107.20523304411515
+          ],
+          "speed": 19.999999701976776,
+          "heading": 0.6376118446806749
+        },
+        {
+          "uav_id": 1,
+          "position": [
+            30.479331584889927,
+            119.76350835942736
+          ],
+          "speed": 19.994055330753326,
+          "heading": 0.9843136104442971
+        },
+        {
+          "uav_id": 2,
+          "position": [
+            95.85395286084494,
+            119.34593742821674
+          ],
+          "speed": 19.998949766159058,
+          "heading": 1.3386568157353462
+        }
+      ],
+      "targets": [
+        {
+          "target_id": 0,
+          "target_position": [
+            141.84726582952672,
+            272.79652361201505
+          ],
+          "detected": false,
+          "assigned_uav_id": null,
+          "detecting_uav_ids": [],
+          "distances": [
+            {
+              "uav_id": 0,
+              "distance": 166.2652599942913,
+              "detected": false
+            },
+            {
+              "uav_id": 1,
+              "distance": 189.26679723400107,
+              "detected": false
+            },
+            {
+              "uav_id": 2,
+              "distance": 160.19509117943164,
+              "detected": false
+            }
+          ]
+        }
+      ],
+      "detection_points_count": 0,
+      "detection_points": [],
+      "last_detection": false
+    },
+    {
+      "step": 3,
+      "uavs": [
+        {
+          "uav_id": 0,
+          "position": [
+            149.327580026723,
+            118.23441906385496
+          ],
+          "speed": 24.999999701976776,
+          "heading": 0.4568991425969835
+        },
+        {
+          "uav_id": 1,
+          "position": [
+            47.296163270523394,
+            138.24909032637106
+          ],
+          "speed": 24.99044954776764,
+          "heading": 0.8326331496242729
+        },
+        {
+          "uav_id": 2,
+          "position": [
+            100.18868962628379,
+            143.96571237742933
+          ],
+          "speed": 24.998465180397034,
+          "heading": 1.3965152842870854
+        }
+      ],
+      "targets": [
+        {
+          "target_id": 0,
+          "target_position": [
+            141.0156572148575,
+            260.1149924938252
+          ],
+          "detected": true,
+          "assigned_uav_id": 2,
+          "detecting_uav_ids": [
+            0,
+            2
+          ],
+          "distances": [
+            {
+              "uav_id": 0,
+              "distance": 142.12383747157824,
+              "detected": true
+            },
+            {
+              "uav_id": 1,
+              "distance": 153.73562260019494,
+              "detected": false
+            },
+            {
+              "uav_id": 2,
+              "distance": 123.11578515379512,
+              "detected": true
+            }
+          ]
+        }
+      ],
+      "detection_points_count": 2,
+      "detection_points": [
+        [
+          149.327580026723,
+          118.23441906385496
+        ],
+        [
+          100.18868962628379,
+          143.96571237742933
+        ]
+      ],
+      "last_detection": true
+    }
+  ]
+}
